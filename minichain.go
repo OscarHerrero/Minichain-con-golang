@@ -1,0 +1,215 @@
+package main
+
+import (
+	"bufio"
+	"fmt"
+	"minichain/blockchain"
+	"minichain/crypto"
+	"os"
+	"strconv"
+	"strings"
+)
+
+func main() {
+	fmt.Println("╔══════════════════════════════════════════╗")
+	fmt.Println("║                                          ║")
+	fmt.Println("║          🔗 MINICHAIN v2.0 🔗           ║")
+	fmt.Println("║   Blockchain con Transacciones          ║")
+	fmt.Println("║                                          ║")
+	fmt.Println("╚══════════════════════════════════════════╝")
+
+	// Crear la blockchain con dificultad 3
+	fmt.Println("\n🚀 Creando blockchain...")
+	bc := blockchain.NewBlockchain(3)
+
+	// Crear una wallet para gestionar cuentas
+	wallet := crypto.NewWallet()
+
+	// Crear 3 cuentas de ejemplo y darles saldo inicial
+	fmt.Println("\n💼 Creando cuentas de ejemplo...")
+
+	account1, _ := wallet.CreateAccount()
+	bc.AccountState.AddBalance(account1, 100.0)
+
+	account2, _ := wallet.CreateAccount()
+	bc.AccountState.AddBalance(account2, 50.0)
+
+	account3, _ := wallet.CreateAccount()
+	bc.AccountState.AddBalance(account3, 75.0)
+
+	fmt.Println("\n💰 Saldos iniciales asignados:")
+	fmt.Printf("   Cuenta 1: 100 MTC\n")
+	fmt.Printf("   Cuenta 2: 50 MTC\n")
+	fmt.Printf("   Cuenta 3: 75 MTC\n")
+
+	// Menú interactivo
+	scanner := bufio.NewScanner(os.Stdin)
+
+	for {
+		fmt.Println("\n╔════════════════════════════════════════╗")
+		fmt.Println("║              MENÚ PRINCIPAL            ║")
+		fmt.Println("╠════════════════════════════════════════╣")
+		fmt.Println("║ 1. Ver cuentas en wallet               ║")
+		fmt.Println("║ 2. Crear nueva cuenta                  ║")
+		fmt.Println("║ 3. Ver estado de cuentas               ║")
+		fmt.Println("║ 4. Crear transacción                   ║")
+		fmt.Println("║ 5. Ver transacciones pendientes        ║")
+		fmt.Println("║ 6. Minar bloque                        ║")
+		fmt.Println("║ 7. Ver blockchain completa             ║")
+		fmt.Println("║ 8. Verificar integridad                ║")
+		fmt.Println("║ 9. Salir                               ║")
+		fmt.Println("╚════════════════════════════════════════╝")
+		fmt.Print("\n👉 Selecciona una opción: ")
+
+		scanner.Scan()
+		option := strings.TrimSpace(scanner.Text())
+
+		switch option {
+		case "1":
+			// Ver cuentas en wallet
+			wallet.ListAccounts()
+
+		case "2":
+			// Crear nueva cuenta
+			address, _ := wallet.CreateAccount()
+			fmt.Printf("\n✨ Cuenta creada: %s\n", address)
+			fmt.Print("💰 ¿Asignar saldo inicial? (cantidad o Enter para 0): ")
+			scanner.Scan()
+			amountStr := strings.TrimSpace(scanner.Text())
+			if amountStr != "" {
+				amount, err := strconv.ParseFloat(amountStr, 64)
+				if err == nil && amount > 0 {
+					bc.AccountState.AddBalance(address, amount)
+					fmt.Printf("✅ Saldo asignado: %.2f MTC\n", amount)
+				}
+			}
+
+		case "3":
+			// Ver estado de cuentas
+			bc.AccountState.Print()
+
+		case "4":
+			// Crear transacción
+			fmt.Println("\n💸 CREAR TRANSACCIÓN")
+
+			// Listar cuentas
+			fmt.Println("\nCuentas disponibles:")
+			accounts := []string{}
+			i := 1
+			for address := range wallet.KeyPairs {
+				fmt.Printf("%d. %s (Balance: %.2f MTC, Nonce: %d)\n",
+					i, address[:16]+"...",
+					bc.GetBalance(address),
+					bc.GetNonce(address))
+				accounts = append(accounts, address)
+				i++
+			}
+
+			// Seleccionar remitente
+			fmt.Print("\n👤 Número de cuenta remitente: ")
+			scanner.Scan()
+			fromIdx, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
+			if err != nil || fromIdx < 1 || fromIdx > len(accounts) {
+				fmt.Println("❌ Cuenta inválida")
+				continue
+			}
+			fromAddress := accounts[fromIdx-1]
+
+			// Seleccionar destinatario
+			fmt.Print("👤 Número de cuenta destinatario: ")
+			scanner.Scan()
+			toIdx, err := strconv.Atoi(strings.TrimSpace(scanner.Text()))
+			if err != nil || toIdx < 1 || toIdx > len(accounts) {
+				fmt.Println("❌ Cuenta inválida")
+				continue
+			}
+			toAddress := accounts[toIdx-1]
+
+			if fromAddress == toAddress {
+				fmt.Println("❌ No puedes enviar a ti mismo")
+				continue
+			}
+
+			// Cantidad
+			fmt.Print("💰 Cantidad a enviar: ")
+			scanner.Scan()
+			amount, err := strconv.ParseFloat(strings.TrimSpace(scanner.Text()), 64)
+			if err != nil || amount <= 0 {
+				fmt.Println("❌ Cantidad inválida")
+				continue
+			}
+
+			// Obtener nonce actual
+			nonce := bc.GetNonce(fromAddress)
+
+			// Crear transacción
+			tx := blockchain.NewTransaction(fromAddress, toAddress, amount, nonce)
+
+			// Firmar transacción
+			keyPair, err := wallet.GetKeyPair(fromAddress)
+			if err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+				continue
+			}
+
+			if err := tx.Sign(keyPair); err != nil {
+				fmt.Printf("❌ Error firmando: %v\n", err)
+				continue
+			}
+
+			// Mostrar transacción
+			tx.Print()
+
+			// Añadir al mempool
+			if err := bc.AddTransaction(tx); err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+				continue
+			}
+
+		case "5":
+			// Ver transacciones pendientes
+			bc.PrintPendingTransactions()
+
+		case "6":
+			// Minar bloque
+			fmt.Println("\n⛏️  MINAR BLOQUE")
+
+			if len(bc.PendingTxs) == 0 {
+				fmt.Println("❌ No hay transacciones pendientes para minar")
+				continue
+			}
+
+			fmt.Printf("📊 Transacciones a incluir: %d\n", len(bc.PendingTxs))
+			fmt.Print("⚠️  Esto puede tardar unos segundos. ¿Continuar? (s/n): ")
+			scanner.Scan()
+			if strings.ToLower(strings.TrimSpace(scanner.Text())) != "s" {
+				continue
+			}
+
+			if err := bc.MineBlock(); err != nil {
+				fmt.Printf("❌ Error: %v\n", err)
+			}
+
+		case "7":
+			// Ver blockchain
+			bc.Print()
+
+		case "8":
+			// Verificar integridad
+			fmt.Println("\n🔍 Verificando integridad de la blockchain...")
+			if bc.IsValid() {
+				fmt.Println("✅ ¡Blockchain válida! Todos los bloques están intactos.")
+			} else {
+				fmt.Println("❌ ¡Blockchain corrupta! Se detectaron alteraciones.")
+			}
+
+		case "9":
+			// Salir
+			fmt.Println("\n👋 ¡Gracias por usar MiniChain!")
+			return
+
+		default:
+			fmt.Println("\n❌ Opción inválida")
+		}
+	}
+}
