@@ -1,3 +1,4 @@
+/*
 package main
 
 import (
@@ -9,7 +10,6 @@ import (
 	"strconv"
 	"strings"
 )
-
 func main() {
 	fmt.Println("╔══════════════════════════════════════════╗")
 	fmt.Println("║                                          ║")
@@ -213,3 +213,4 @@ func main() {
 		}
 	}
 }
+*/

@@ -1,0 +1,167 @@
+package main
+
+import (
+	"fmt"
+	"minichain/evm"
+)
+
+func main() {
+	fmt.Println("╔══════════════════════════════════════════╗")
+	fmt.Println("║                                          ║")
+	fmt.Println("║              TEST EVM v1.0               ║")
+	fmt.Println("║                                          ║")
+	fmt.Println("╚══════════════════════════════════════════╝")
+	
+	// Menú de pruebas
+	fmt.Println("\n╔════════════════════════════════════════╗")
+	fmt.Println("║         PROGRAMAS DE PRUEBA            ║")
+	fmt.Println("╠════════════════════════════════════════╣")
+	fmt.Println("║ 1. Suma simple: 5 + 3                  ║")
+	fmt.Println("║ 2. Multiplicación: 7 * 4               ║")
+	fmt.Println("║ 3. Operaciones complejas               ║")
+	fmt.Println("║ 4. Guardar en storage                  ║")
+	fmt.Println("║ 5. Leer de storage                     ║")
+	fmt.Println("║ 6. Comparaciones                       ║")
+	fmt.Println("║ 7. Stack avanzado (DUP, SWAP)          ║")
+	fmt.Println("╚════════════════════════════════════════╝")
+	
+	fmt.Print("\n👉 Selecciona un programa (1-7): ")
+	var choice int
+	fmt.Scan(&choice)
+	
+	var bytecode []byte
+	var description string
+	
+	switch choice {
+	case 1:
+		// Programa 1: 5 + 3
+		description = "Suma: 5 + 3"
+		bytecode = []byte{
+			0x60, 0x05, // PUSH1 5
+			0x60, 0x03, // PUSH1 3
+			0x01,       // ADD
+			0x00,       // STOP
+		}
+		
+	case 2:
+		// Programa 2: 7 * 4
+		description = "Multiplicación: 7 * 4"
+		bytecode = []byte{
+			0x60, 0x07, // PUSH1 7
+			0x60, 0x04, // PUSH1 4
+			0x02,       // MUL
+			0x00,       // STOP
+		}
+		
+	case 3:
+		// Programa 3: (10 + 5) * 2 - 3
+		description = "Operaciones complejas: (10 + 5) * 2 - 3"
+		bytecode = []byte{
+			0x60, 0x0a, // PUSH1 10
+			0x60, 0x05, // PUSH1 5
+			0x01,       // ADD → 15
+			0x60, 0x02, // PUSH1 2
+			0x02,       // MUL → 30
+			0x60, 0x03, // PUSH1 3
+			0x03,       // SUB → 27
+			0x00,       // STOP
+		}
+		
+	case 4:
+		// Programa 4: Guardar en storage
+		description = "Guardar 100 en storage[0] y 200 en storage[1]"
+		bytecode = []byte{
+			0x60, 0x64, // PUSH1 100 (valor)
+			0x60, 0x00, // PUSH1 0 (key)
+			0x55,       // SSTORE → storage[0] = 100
+			
+			0x60, 0xc8, // PUSH1 200 (valor)
+			0x60, 0x01, // PUSH1 1 (key)
+			0x55,       // SSTORE → storage[1] = 200
+			
+			0x00,       // STOP
+		}
+		
+	case 5:
+		// Programa 5: Guardar y leer de storage
+		description = "Guardar 42 en storage[5] y luego leerlo"
+		bytecode = []byte{
+			// Guardar
+			0x60, 0x2a, // PUSH1 42 (valor)
+			0x60, 0x05, // PUSH1 5 (key)
+			0x55,       // SSTORE → storage[5] = 42
+			
+			// Leer
+			0x60, 0x05, // PUSH1 5 (key)
+			0x54,       // SLOAD → carga storage[5]
+			
+			// Duplicar el valor leído
+			0x80,       // DUP1
+			
+			0x00,       // STOP
+		}
+		
+	case 6:
+		// Programa 6: Comparaciones
+		description = "Comparaciones: 10 > 5, 3 < 8, 7 == 7"
+		bytecode = []byte{
+			// 10 > 5
+			0x60, 0x0a, // PUSH1 10
+			0x60, 0x05, // PUSH1 5
+			0x11,       // GT → 1 (true)
+			
+			// 3 < 8
+			0x60, 0x03, // PUSH1 3
+			0x60, 0x08, // PUSH1 8
+			0x10,       // LT → 1 (true)
+			
+			// 7 == 7
+			0x60, 0x07, // PUSH1 7
+			0x60, 0x07, // PUSH1 7
+			0x14,       // EQ → 1 (true)
+			
+			0x00,       // STOP
+		}
+		
+	case 7:
+		// Programa 7: DUP y SWAP
+		description = "Stack avanzado: DUP y SWAP"
+		bytecode = []byte{
+			0x60, 0x0a, // PUSH1 10
+			0x60, 0x14, // PUSH1 20
+			0x60, 0x1e, // PUSH1 30
+			// Stack: [10, 20, 30]
+			
+			0x80,       // DUP1 → duplica el tope
+			// Stack: [10, 20, 30, 30]
+			
+			0x90,       // SWAP1 → intercambia tope y segundo
+			// Stack: [10, 20, 30, 30] → [10, 20, 30, 30]
+			
+			0x00,       // STOP
+		}
+		
+	default:
+		fmt.Println("❌ Opción inválida")
+		return
+	}
+	
+	// Ejecutar el bytecode
+	fmt.Printf("\n📋 Programa: %s\n", description)
+	fmt.Printf("📦 Bytecode: %x\n", bytecode)
+	
+	// Crear VM con suficiente gas
+	vm := evm.NewVM(bytecode, 100000)
+	
+	// Ejecutar
+	if err := vm.Run(); err != nil {
+		fmt.Printf("\n❌ Error: %v\n", err)
+		return
+	}
+	
+	// Mostrar estado final
+	fmt.Println("\n╔════════════════════════════════════════╗")
+	fmt.Println("║          ESTADO FINAL                  ║")
+	fmt.Println("╚════════════════════════════════════════╝")
+	vm.PrintState()
+}
