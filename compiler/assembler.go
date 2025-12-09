@@ -53,100 +53,111 @@ func NewAssembler() *Assembler {
 func (a *Assembler) Assemble(code string) ([]byte, error) {
 	// Limpiar y separar en líneas
 	lines := strings.Split(code, "\n")
-	
+
 	bytecode := []byte{}
-	
+
 	for lineNum, line := range lines {
 		// Limpiar espacios y comentarios
 		line = strings.TrimSpace(line)
 		if line == "" || strings.HasPrefix(line, "//") {
 			continue
 		}
-		
+
 		// Separar por espacios
 		parts := strings.Fields(line)
 		if len(parts) == 0 {
 			continue
 		}
-		
+
 		instruction := strings.ToUpper(parts[0])
-		
+
 		// Verificar si es un opcode conocido
 		opcode, exists := a.opcodeMap[instruction]
 		if !exists {
 			return nil, fmt.Errorf("línea %d: opcode desconocido '%s'", lineNum+1, instruction)
 		}
-		
+
 		// Añadir el opcode
 		bytecode = append(bytecode, byte(opcode))
-		
+
 		// Si es PUSH, necesitamos el valor
 		if opcode.IsPush() {
 			if len(parts) < 2 {
 				return nil, fmt.Errorf("línea %d: PUSH requiere un valor", lineNum+1)
 			}
-			
+
 			// Parsear el valor
 			valueStr := parts[1]
 			value, err := parseValue(valueStr)
 			if err != nil {
 				return nil, fmt.Errorf("línea %d: error parseando valor '%s': %v", lineNum+1, valueStr, err)
 			}
-			
-			// Añadir los bytes del valor
+
+			// Obtener el tamaño del PUSH
 			pushSize := opcode.PushSize()
+
+			// Verificar que el valor cabe en el tamaño
+			maxValue := int64(1) << uint(pushSize*8) // 2^(pushSize*8)
+			if value >= maxValue {
+				return nil, fmt.Errorf("línea %d: valor %d demasiado grande para %s (máx: %d)",
+					lineNum+1, value, instruction, maxValue-1)
+			}
+
+			// Convertir a bytes (big-endian)
 			valueBytes := intToBytes(value, pushSize)
 			bytecode = append(bytecode, valueBytes...)
 		}
 	}
-	
+
 	return bytecode, nil
 }
 
 // parseValue parsea un valor (decimal o hexadecimal)
 func parseValue(s string) (int64, error) {
 	s = strings.TrimSpace(s)
-	
+
 	// ¿Es hexadecimal? (0x...)
 	if strings.HasPrefix(s, "0x") || strings.HasPrefix(s, "0X") {
 		value, err := strconv.ParseInt(s[2:], 16, 64)
 		if err != nil {
-			return 0, err
+			return 0, fmt.Errorf("valor hexadecimal inválido: %s", s)
 		}
 		return value, nil
 	}
-	
+
 	// Es decimal
 	value, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
-		return 0, err
+		return 0, fmt.Errorf("valor decimal inválido: %s", s)
 	}
+
 	return value, nil
 }
 
 // intToBytes convierte un int64 a bytes (big-endian)
 func intToBytes(value int64, size int) []byte {
 	bytes := make([]byte, size)
-	
+
+	// Convertir de derecha a izquierda (big-endian)
 	for i := size - 1; i >= 0; i-- {
-		bytes[i] = byte(value & 0xff)
+		bytes[i] = byte(value & 0xFF)
 		value >>= 8
 	}
-	
+
 	return bytes
 }
 
 // Disassemble convierte bytecode a assembly legible
 func (a *Assembler) Disassemble(bytecode []byte) string {
 	var output strings.Builder
-	
+
 	pc := 0
 	for pc < len(bytecode) {
 		op := evm.OpCode(bytecode[pc])
-		
+
 		// Escribir el opcode
 		output.WriteString(fmt.Sprintf("%04d: %s", pc, op.String()))
-		
+
 		// Si es PUSH, mostrar el valor
 		if op.IsPush() {
 			pushSize := op.PushSize()
@@ -156,11 +167,11 @@ func (a *Assembler) Disassemble(bytecode []byte) string {
 				pc += pushSize
 			}
 		}
-		
+
 		output.WriteString("\n")
 		pc++
 	}
-	
+
 	return output.String()
 }
 
@@ -169,10 +180,10 @@ func PrintBytecode(bytecode []byte) {
 	fmt.Println("\n╔════════════════════════════════════════╗")
 	fmt.Println("║            BYTECODE                    ║")
 	fmt.Println("╚════════════════════════════════════════╝")
-	
+
 	fmt.Printf("Tamaño: %d bytes\n", len(bytecode))
 	fmt.Printf("Hex: %x\n", bytecode)
-	
+
 	// Mostrar en grupos de 16 bytes
 	for i := 0; i < len(bytecode); i += 16 {
 		end := i + 16
@@ -182,6 +193,7 @@ func PrintBytecode(bytecode []byte) {
 		fmt.Printf("%04d: %x\n", i, bytecode[i:end])
 	}
 }
+
 /*
 
 ## ¿QUÉ HACE ESTE ARCHIVO?

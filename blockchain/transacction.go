@@ -7,17 +7,36 @@ import (
 	"minichain/crypto"
 )
 
-// Transaction representa una transferencia de fondos
+// Transaction representa una transacción en la blockchain
 type Transaction struct {
-	From      string  // Dirección del remitente
-	To        string  // Dirección del destinatario
-	Amount    float64 // Cantidad a transferir
-	Nonce     int     // Contador de transacciones del remitente
-	Signature string  // Firma digital del remitente
-
-	// Coordenadas de la clave pública (para verificar firma)
+	From       string
+	To         string // Si es "", es despliegue de contrato
+	Amount     float64
+	Nonce      int
+	Data       []byte // Bytecode (para deploy) o calldata (para call)
+	Signature  string
 	PublicKeyX *big.Int
 	PublicKeyY *big.Int
+
+	// Metadata de ejecución
+	ContractAddress string // Si despliega contrato, guarda la dirección aquí
+	GasUsed         uint64 // Gas consumido en la ejecución
+}
+
+// IsContractDeployment verifica si es una transacción de despliegue
+func (tx *Transaction) IsContractDeployment() bool {
+	return tx.To == "" && len(tx.Data) > 0
+}
+
+// IsContractCall verifica si es una llamada a contrato
+func (tx *Transaction) IsContractCall(bc *Blockchain) bool {
+	if tx.To == "" {
+		return false
+	}
+
+	// Verificar si el destinatario es un contrato
+	_, err := bc.GetContract(tx.To)
+	return err == nil
 }
 
 // NewTransaction crea una nueva transacción (sin firmar)
@@ -79,61 +98,86 @@ func (tx *Transaction) VerifySignature() bool {
 	return crypto.VerifySignature(tx.PublicKeyX, tx.PublicKeyY, dataToSign, tx.Signature)
 }
 
-// Validate verifica que la transacción sea válida
-func (tx *Transaction) Validate(state *AccountState) error {
-	// 1. Verificar que tenga firma
+// Validate valida la transacción antes de añadirla al mempool
+func (tx *Transaction) Validate(state *AccountState, bc *Blockchain) error {
+	// Verificar que esté firmada
 	if tx.Signature == "" {
-		return fmt.Errorf("transacción sin firmar")
+		return fmt.Errorf("transacción no firmada")
 	}
 
-	// 2. Verificar que la firma sea válida
+	// Verificar la firma
 	if !tx.VerifySignature() {
 		return fmt.Errorf("firma inválida")
 	}
 
-	// 3. Verificar que el monto sea positivo
-	if tx.Amount <= 0 {
-		return fmt.Errorf("monto debe ser positivo: %.2f", tx.Amount)
+	// Verificar que el monto no sea negativo
+	if tx.Amount < 0 {
+		return fmt.Errorf("monto no puede ser negativo: %.2f", tx.Amount)
 	}
 
-	// 4. Obtener la cuenta del remitente
+	// Determinar tipo de transacción y validar
+	isContractDeployment := tx.IsContractDeployment()
+	isContractCall := tx.IsContractCall(bc)
+
+	// Validar que la transacción tenga propósito
+	if !isContractDeployment && !isContractCall && tx.Amount == 0 {
+		return fmt.Errorf("transacción sin propósito: sin monto, sin deploy, sin llamada")
+	}
+
+	// Verificar que el nonce sea correcto
 	account := state.GetAccount(tx.From)
+	expectedNonce := account.Nonce
 
-	// 5. Verificar el nonce (debe ser EXACTAMENTE el siguiente)
-	if tx.Nonce != account.Nonce {
-		return fmt.Errorf("nonce inválido: esperado %d, recibido %d", account.Nonce, tx.Nonce)
+	if tx.Nonce != expectedNonce {
+		return fmt.Errorf("nonce incorrecto: esperado %d, recibido %d", expectedNonce, tx.Nonce)
 	}
 
-	// 6. Verificar que tenga saldo suficiente
-	if account.Balance < tx.Amount {
-		return fmt.Errorf("saldo insuficiente: tiene %.2f, necesita %.2f", account.Balance, tx.Amount)
+	// Verificar saldo suficiente (solo si hay transferencia de fondos)
+	if tx.Amount > 0 {
+		if account.Balance < tx.Amount {
+			return fmt.Errorf("saldo insuficiente: %.2f < %.2f", account.Balance, tx.Amount)
+		}
 	}
 
 	return nil
 }
 
-// Execute ejecuta la transacción (transfiere los fondos)
-func (tx *Transaction) Execute(state *AccountState) error {
-	// Validar antes de ejecutar
-	if err := tx.Validate(state); err != nil {
-		return err
+// Execute ejecuta la transacción (transfiere fondos Y ejecuta contratos si aplica)
+func (tx *Transaction) Execute(state *AccountState, bc *Blockchain) error {
+	// 1. Si es transferencia de fondos (Amount > 0)
+	if tx.Amount > 0 {
+		// Restar del remitente
+		if err := state.SubtractBalance(tx.From, tx.Amount); err != nil {
+			return err
+		}
+
+		// Sumar al destinatario (si no es contrato)
+		if tx.To != "" {
+			state.AddBalance(tx.To, tx.Amount)
+		}
 	}
 
-	// Restar del remitente
-	if err := state.SubtractBalance(tx.From, tx.Amount); err != nil {
-		return err
-	}
-
-	// Sumar al destinatario
-	state.AddBalance(tx.To, tx.Amount)
-
-	// Incrementar el nonce del remitente
+	// 2. Incrementar nonce del remitente
 	state.IncrementNonce(tx.From)
 
-	fmt.Printf("✅ Transacción ejecutada: %.2f MTC de %s a %s\n",
-		tx.Amount,
-		tx.From[:8]+"...",
-		tx.To[:8]+"...")
+	// 3. Si tiene datos (bytecode/calldata), ejecutar contrato
+	if len(tx.Data) > 0 || tx.IsContractCall(bc) {
+		if err := tx.ExecuteContract(bc); err != nil {
+			return fmt.Errorf("error ejecutando contrato: %v", err)
+		}
+
+		// 4. COBRAR GAS
+		if tx.GasUsed > 0 {
+			gasPrice := 0.000001 // 1 gas = 0.000001 MTC
+			gasCost := float64(tx.GasUsed) * gasPrice
+
+			fmt.Printf("   ⛽ Costo de gas: %.6f MTC (%d gas × %.6f)\n", gasCost, tx.GasUsed, gasPrice)
+
+			if err := state.SubtractBalance(tx.From, gasCost); err != nil {
+				return fmt.Errorf("saldo insuficiente para gas: %v", err)
+			}
+		}
+	}
 
 	return nil
 }
@@ -168,4 +212,65 @@ func (tx *Transaction) Print() {
 	} else {
 		fmt.Printf("⚠️  Signature: (sin firmar)\n")
 	}
+}
+
+// NewContractDeploymentTx crea una transacción para desplegar un contrato
+func NewContractDeploymentTx(from string, bytecode []byte, nonce int) *Transaction {
+	return &Transaction{
+		From:   from,
+		To:     "", // Vacío = deploy
+		Amount: 0,
+		Nonce:  nonce,
+		Data:   bytecode,
+	}
+}
+
+// NewContractCallTx crea una transacción para llamar a un contrato
+func NewContractCallTx(from, contractAddr string, calldata []byte, nonce int) *Transaction {
+	return &Transaction{
+		From:   from,
+		To:     contractAddr,
+		Amount: 0,
+		Nonce:  nonce,
+		Data:   calldata,
+	}
+}
+
+// ExecuteContract ejecuta un contrato (deploy o call)
+func (tx *Transaction) ExecuteContract(bc *Blockchain) error {
+	if tx.IsContractDeployment() {
+		// DESPLEGAR CONTRATO
+		contract, err := bc.DeployContract(tx.From, tx.Data)
+		if err != nil {
+			return fmt.Errorf("error desplegando contrato: %v", err)
+		}
+
+		// Guardar dirección del contrato en la transacción
+		tx.ContractAddress = contract.Address
+
+		fmt.Printf("   📜 Contrato desplegado: %s\n", contract.Address[:16]+"...")
+		return nil
+
+	} else if tx.IsContractCall(bc) {
+		// LLAMAR A CONTRATO
+		contract, err := bc.GetContract(tx.To)
+		if err != nil {
+			return err
+		}
+
+		fmt.Printf("   ⚙️  Ejecutando contrato %s...\n", tx.To[:16]+"...")
+
+		// Ejecutar con gas suficiente
+		vm, err := contract.Execute(1000000)
+		if err != nil {
+			return fmt.Errorf("error ejecutando contrato: %v", err)
+		}
+
+		tx.GasUsed = 1000000 - vm.Gas
+		fmt.Printf("   ✅ Gas usado: %d\n", tx.GasUsed)
+
+		return nil
+	}
+
+	return nil
 }

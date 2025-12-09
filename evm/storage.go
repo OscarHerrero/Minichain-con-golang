@@ -8,13 +8,13 @@ import (
 // Storage es el almacenamiento persistente del contrato
 // Los datos aquí NO se borran (como el disco duro)
 type Storage struct {
-	data map[string]*big.Int // key -> value
+	Data map[string]*big.Int // key -> value
 }
 
 // NewStorage crea un nuevo storage vacío
 func NewStorage() *Storage {
 	return &Storage{
-		data: make(map[string]*big.Int),
+		Data: make(map[string]*big.Int),
 	}
 }
 
@@ -22,25 +22,25 @@ func NewStorage() *Storage {
 func (s *Storage) Store(key, value *big.Int) {
 	// Convertir la key a string para usar como índice del map
 	keyStr := key.String()
-	
+
 	// Si el valor es 0, eliminar la entrada (ahorrar espacio)
 	if value.Cmp(big.NewInt(0)) == 0 {
-		delete(s.data, keyStr)
+		delete(s.Data, keyStr)
 	} else {
-		s.data[keyStr] = new(big.Int).Set(value)
+		s.Data[keyStr] = new(big.Int).Set(value)
 	}
 }
 
 // Load carga un valor del storage
 func (s *Storage) Load(key *big.Int) *big.Int {
 	keyStr := key.String()
-	
-	value, exists := s.data[keyStr]
+
+	value, exists := s.Data[keyStr]
 	if !exists {
 		// Si no existe, devolver 0
 		return big.NewInt(0)
 	}
-	
+
 	return new(big.Int).Set(value)
 }
 
@@ -49,13 +49,13 @@ func (s *Storage) Print() {
 	fmt.Println("\n╔════════════════════════════════════════╗")
 	fmt.Println("║      STORAGE (ALMACENAMIENTO)          ║")
 	fmt.Println("╚════════════════════════════════════════╝")
-	
-	if len(s.data) == 0 {
+
+	if len(s.Data) == 0 {
 		fmt.Println("   (vacío)")
 		return
 	}
-	
-	for key, value := range s.data {
+
+	for key, value := range s.Data {
 		fmt.Printf("Key [%s] = %s\n", key, value.String())
 	}
 }

@@ -2,14 +2,17 @@ package blockchain
 
 import (
 	"fmt"
+	"minichain/evm"
+	"time"
 )
 
 // Blockchain es la cadena completa de bloques
 type Blockchain struct {
-	Blocks       []*Block       // Array de bloques
-	Difficulty   int            // Dificultad del minado (ej: 3 = "000...")
-	AccountState *AccountState  // Estado de todas las cuentas
-	PendingTxs   []*Transaction // Transacciones pendientes (mempool)
+	Blocks       []*Block                 // Array de bloques
+	Difficulty   int                      // Dificultad del minado (ej: 3 = "000...")
+	AccountState *AccountState            // Estado de todas las cuentas
+	PendingTxs   []*Transaction           // Transacciones pendientes (mempool)
+	Contracts    map[string]*evm.Contract // Contratos desplegados
 }
 
 // NewBlockchain crea una nueva blockchain con el bloque génesis
@@ -26,6 +29,7 @@ func NewBlockchain(difficulty int) *Blockchain {
 		Difficulty:   difficulty,
 		AccountState: NewAccountState(),
 		PendingTxs:   []*Transaction{},
+		Contracts:    make(map[string]*evm.Contract),
 	}
 
 	return bc
@@ -34,8 +38,8 @@ func NewBlockchain(difficulty int) *Blockchain {
 // AddTransaction añade una transacción al mempool (pendientes)
 func (bc *Blockchain) AddTransaction(tx *Transaction) error {
 	// Validar la transacción
-	if err := tx.Validate(bc.AccountState); err != nil {
-		return fmt.Errorf("transacción inválida: %v", err)
+	if err := tx.Validate(bc.AccountState, bc); err != nil {
+		return err
 	}
 
 	// Añadir al mempool
@@ -47,41 +51,63 @@ func (bc *Blockchain) AddTransaction(tx *Transaction) error {
 }
 
 // MineBlock mina un nuevo bloque con las transacciones pendientes
-func (bc *Blockchain) MineBlock() error {
+func (bc *Blockchain) MineBlock() {
 	if len(bc.PendingTxs) == 0 {
-		return fmt.Errorf("no hay transacciones pendientes")
+		fmt.Println("\n⚠️  No hay transacciones pendientes para minar")
+		return
 	}
 
-	// Obtener el último bloque de la cadena
-	previousBlock := bc.Blocks[len(bc.Blocks)-1]
+	prevBlock := bc.Blocks[len(bc.Blocks)-1]
 
-	// Crear nuevo bloque con las transacciones pendientes
-	newBlock := NewBlock(
-		previousBlock.Index+1,
-		bc.PendingTxs,
-		previousBlock.Hash,
-	)
+	// Crear nuevo bloque
+	newBlock := &Block{
+		Index:        len(bc.Blocks),
+		Timestamp:    time.Now(),
+		Transactions: bc.PendingTxs,
+		PreviousHash: prevBlock.Hash,
+		Nonce:        0,
+	}
 
-	// Minar el nuevo bloque (encontrar un hash válido)
+	// Minar el bloque
+	fmt.Printf("\n⛏️  Minando bloque %d (dificultad: %d, %d transacciones)...\n",
+		newBlock.Index, bc.Difficulty, len(bc.PendingTxs))
+
 	newBlock.MineBlock(bc.Difficulty)
 
-	// Ejecutar todas las transacciones del bloque
-	for _, tx := range newBlock.Transactions {
-		if err := tx.Execute(bc.AccountState); err != nil {
-			// Esto no debería pasar si validamos antes
-			return fmt.Errorf("error ejecutando transacción: %v", err)
+	// EJECUTAR TRANSACCIONES (incluye contratos)
+	fmt.Println("\n💼 Ejecutando transacciones del bloque...")
+	for i, tx := range bc.PendingTxs {
+		fmt.Printf("\n📝 Transacción %d/%d:\n", i+1, len(bc.PendingTxs))
+
+		// Mostrar tipo de transacción
+		if tx.IsContractDeployment() {
+			fmt.Println("   Tipo: DESPLIEGUE DE CONTRATO")
+		} else if tx.IsContractCall(bc) {
+			fmt.Println("   Tipo: LLAMADA A CONTRATO")
+		} else {
+			fmt.Printf("   Tipo: TRANSFERENCIA (%s → %s: %.2f MTC)\n",
+				tx.From[:16]+"...", tx.To[:16]+"...", tx.Amount)
+		}
+
+		// Ejecutar (incluye contratos si aplica)
+		if err := tx.Execute(bc.AccountState, bc); err != nil {
+			fmt.Printf("   ❌ Error: %v\n", err)
+			continue
+		}
+
+		if tx.Amount > 0 {
+			fmt.Printf("   ✅ Fondos transferidos\n")
 		}
 	}
 
 	// Añadir bloque a la cadena
 	bc.Blocks = append(bc.Blocks, newBlock)
 
-	// Limpiar el mempool
+	// Limpiar transacciones pendientes
 	bc.PendingTxs = []*Transaction{}
 
-	fmt.Printf("\n✨ Bloque minado y añadido a la cadena (total: %d bloques)\n", len(bc.Blocks))
-
-	return nil
+	fmt.Printf("\n✅ Bloque %d minado exitosamente!\n", newBlock.Index)
+	fmt.Printf("   Hash: %s\n", newBlock.Hash)
 }
 
 // GetBalance obtiene el saldo de una cuenta
@@ -147,12 +173,94 @@ func (bc *Blockchain) PrintPendingTransactions() {
 	fmt.Println("╚════════════════════════════════════════╝")
 
 	if len(bc.PendingTxs) == 0 {
-		fmt.Println("   (No hay transacciones pendientes)")
+		fmt.Println("\n   (No hay transacciones pendientes)")
 		return
 	}
 
 	for i, tx := range bc.PendingTxs {
-		fmt.Printf("\n%d. %.2f MTC: %s → %s\n",
-			i+1, tx.Amount, tx.From[:8]+"...", tx.To[:8]+"...")
+		fmt.Printf("\n%d. From: %s\n", i+1, tx.From[:16]+"...")
+
+		// Determinar tipo de transacción
+		if tx.IsContractDeployment() {
+			fmt.Println("   To: (CONTRATO - DEPLOYMENT)")
+			fmt.Printf("   Monto: %.2f MTC\n", tx.Amount)
+			fmt.Printf("   Data: %d bytes\n", len(tx.Data))
+		} else if tx.To == "" {
+			fmt.Println("   To: (Sin destinatario)")
+		} else if len(tx.To) >= 8 {
+			fmt.Printf("   To: %s\n", tx.To[:16]+"...")
+			fmt.Printf("   Monto: %.2f MTC\n", tx.Amount)
+			if len(tx.Data) > 0 {
+				fmt.Printf("   Data: %d bytes (LLAMADA A CONTRATO)\n", len(tx.Data))
+			}
+		} else {
+			fmt.Printf("   To: %s\n", tx.To)
+			fmt.Printf("   Monto: %.2f MTC\n", tx.Amount)
+		}
+
+		fmt.Printf("   Nonce: %d\n", tx.Nonce)
+		fmt.Printf("   Firmada: %v\n", tx.Signature != "")
+	}
+}
+
+// DeployContract despliega un contrato en la blockchain
+func (bc *Blockchain) DeployContract(owner string, bytecode []byte) (*evm.Contract, error) {
+	// Crear el contrato
+	contract := evm.NewContract(owner, bytecode)
+
+	// Guardar en la blockchain
+	bc.Contracts[contract.Address] = contract
+
+	fmt.Printf("\n📜 Contrato desplegado en: %s\n", contract.Address)
+
+	return contract, nil
+}
+
+// GetContract obtiene un contrato por su dirección
+func (bc *Blockchain) GetContract(address string) (*evm.Contract, error) {
+	contract, exists := bc.Contracts[address]
+	if !exists {
+		return nil, fmt.Errorf("contrato no encontrado: %s", address)
+	}
+	return contract, nil
+}
+
+// ExecuteContract ejecuta un contrato
+func (bc *Blockchain) ExecuteContract(address string, gas uint64) error {
+	contract, err := bc.GetContract(address)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("\n⚙️  Ejecutando contrato %s...\n", address[:16]+"...")
+
+	vm, err := contract.Execute(gas)
+	if err != nil {
+		return fmt.Errorf("error ejecutando contrato: %v", err)
+	}
+
+	fmt.Printf("✅ Contrato ejecutado. Gas usado: %d\n", gas-vm.Gas)
+
+	return nil
+}
+
+// ListContracts muestra todos los contratos desplegados
+func (bc *Blockchain) ListContracts() {
+	fmt.Println("\n╔════════════════════════════════════════╗")
+	fmt.Println("║      CONTRATOS DESPLEGADOS             ║")
+	fmt.Println("╚════════════════════════════════════════╝")
+
+	if len(bc.Contracts) == 0 {
+		fmt.Println("   (No hay contratos desplegados)")
+		return
+	}
+
+	i := 1
+	for address, contract := range bc.Contracts {
+		fmt.Printf("\n%d. %s\n", i, address)
+		fmt.Printf("   Owner:    %s\n", contract.Owner[:16]+"...")
+		fmt.Printf("   Bytecode: %d bytes\n", len(contract.Bytecode))
+		fmt.Printf("   Storage:  %d keys\n", len(contract.Storage.Data))
+		i++
 	}
 }

@@ -1,10 +1,10 @@
 package blockchain
 
 import (
-	"encoding/json"
 	"fmt"
 	"minichain/utils"
 	"strconv"
+	"strings"
 	"time"
 )
 
@@ -44,22 +44,25 @@ func NewGenesisBlock() *Block {
 // getTransactionsData convierte las transacciones a string para el hash
 func (b *Block) getTransactionsData() string {
 	if len(b.Transactions) == 0 {
-		return "GENESIS"
+		return ""
 	}
 
-	// Serializar todas las transacciones a JSON
+	// Serializar transacciones a JSON para el hash
 	var txData []string
 	for _, tx := range b.Transactions {
-		jsonTx, err := tx.ToJSON()
-		if err != nil {
-			jsonTx = fmt.Sprintf("%s:%s:%.2f:%d", tx.From, tx.To, tx.Amount, tx.Nonce)
-		}
-		txData = append(txData, jsonTx)
+		// Incluir TODOS los campos que definen la transacción
+		txStr := fmt.Sprintf("from=%s|to=%s|amount=%.2f|nonce=%d|data=%x|sig=%s",
+			tx.From,
+			tx.To,
+			tx.Amount,
+			tx.Nonce,
+			tx.Data,
+			tx.Signature,
+		)
+		txData = append(txData, txStr)
 	}
 
-	// Combinar todas en un string
-	result, _ := json.Marshal(txData)
-	return string(result)
+	return strings.Join(txData, "||")
 }
 
 // CalculateBlockHash calcula el hash del bloque
@@ -125,9 +128,49 @@ func (b *Block) Print() {
 
 	// Mostrar transacciones si las hay
 	if len(b.Transactions) > 0 {
-		for i, tx := range b.Transactions {
-			fmt.Printf("   %d. %.2f MTC: %s → %s\n",
-				i+1, tx.Amount, tx.From[:8]+"...", tx.To[:8]+"...")
+		// Mostrar transacciones
+		if len(b.Transactions) > 0 {
+			for i, tx := range b.Transactions {
+				fmt.Printf("\n📝 Transacción %d:\n", i+1)
+
+				// From (siempre existe)
+				if len(tx.From) >= 16 {
+					fmt.Printf("   From: %s\n", tx.From[:16]+"...")
+				} else {
+					fmt.Printf("   From: %s\n", tx.From)
+				}
+
+				// To (depende del tipo)
+				if tx.IsContractDeployment() {
+					fmt.Println("   To: (CONTRATO - DEPLOYMENT)")
+					if tx.ContractAddress != "" && len(tx.ContractAddress) >= 16 {
+						fmt.Printf("   Contrato desplegado: %s\n", tx.ContractAddress[:16]+"...")
+					} else if tx.ContractAddress != "" {
+						fmt.Printf("   Contrato desplegado: %s\n", tx.ContractAddress)
+					}
+				} else if tx.To == "" {
+					fmt.Println("   To: (vacío)")
+				} else if len(tx.To) >= 16 {
+					fmt.Printf("   To: %s\n", tx.To[:16]+"...")
+					if len(tx.Data) > 0 {
+						fmt.Println("   Tipo: LLAMADA A CONTRATO")
+					}
+				} else {
+					fmt.Printf("   To: %s\n", tx.To)
+				}
+
+				// Resto de info
+				fmt.Printf("   Monto: %.2f MTC\n", tx.Amount)
+				fmt.Printf("   Nonce: %d\n", tx.Nonce)
+
+				if tx.GasUsed > 0 {
+					fmt.Printf("   Gas usado: %d\n", tx.GasUsed)
+				}
+
+				if len(tx.Data) > 0 && tx.IsContractDeployment() {
+					fmt.Printf("   Bytecode: %d bytes\n", len(tx.Data))
+				}
+			}
 		}
 	}
 
