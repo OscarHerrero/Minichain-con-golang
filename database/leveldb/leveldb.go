@@ -153,7 +153,7 @@ func (db *Database) NewBatch() database.Batch {
 func (db *Database) NewBatchWithSize(size int) database.Batch {
 	return &batch{
 		db: db.db,
-		b:  leveldb.MakeBatch(size),
+		b:  new(leveldb.Batch),
 	}
 }
 
