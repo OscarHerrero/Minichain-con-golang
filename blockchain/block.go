@@ -16,6 +16,11 @@ type Block struct {
 	PreviousHash string         // Hash del bloque anterior (esto crea la "cadena")
 	Hash         string         // Hash de ESTE bloque (su huella digital única)
 	Nonce        int            // Número que se va probando hasta encontrar un hash válido
+
+	// Merkle roots (estilo Ethereum)
+	StateRoot   []byte // Root del árbol de estado (todas las cuentas y contratos)
+	TxRoot      []byte // Root del árbol de transacciones
+	ReceiptRoot []byte // Root del árbol de receipts (resultados de ejecución)
 }
 
 // NewBlock crea un nuevo bloque (sin minar todavía)
@@ -38,6 +43,9 @@ func NewGenesisBlock() *Block {
 		Transactions: []*Transaction{}, // Sin transacciones
 		PreviousHash: "0",
 		Nonce:        0,
+		StateRoot:    make([]byte, 32), // Root vacío (hash de trie vacío)
+		TxRoot:       make([]byte, 32), // Sin transacciones
+		ReceiptRoot:  make([]byte, 32), // Sin receipts
 	}
 }
 
@@ -73,7 +81,10 @@ func (b *Block) CalculateBlockHash() string {
 		b.Timestamp.String() +
 		b.getTransactionsData() +
 		b.PreviousHash +
-		strconv.Itoa(b.Nonce)
+		strconv.Itoa(b.Nonce) +
+		string(b.StateRoot) +
+		string(b.TxRoot) +
+		string(b.ReceiptRoot)
 
 	// Calculamos el hash SHA-256 de todo eso
 	return utils.CalculateHash(record)

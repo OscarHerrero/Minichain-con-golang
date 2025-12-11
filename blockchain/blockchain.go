@@ -1,21 +1,30 @@
 package blockchain
 
 import (
+	"encoding/hex"
 	"fmt"
+	"minichain/core/rawdb"
+	"minichain/core/state"
+	"minichain/database"
+	"minichain/database/leveldb"
 	"minichain/evm"
 	"time"
 )
 
 // Blockchain es la cadena completa de bloques
 type Blockchain struct {
-	Blocks       []*Block                 // Array de bloques
+	Blocks       []*Block                 // Array de bloques (en memoria, para compatibilidad)
 	Difficulty   int                      // Dificultad del minado (ej: 3 = "000...")
-	AccountState *AccountState            // Estado de todas las cuentas
+	AccountState *AccountState            // Estado de todas las cuentas (legacy)
 	PendingTxs   []*Transaction           // Transacciones pendientes (mempool)
-	Contracts    map[string]*evm.Contract // Contratos desplegados
+	Contracts    map[string]*evm.Contract // Contratos desplegados (legacy, ahora en StateDB)
+
+	// Persistencia estilo Ethereum
+	db      database.Database // Base de datos LevelDB
+	stateDB *state.StateDB    // Estado mundial (cuentas + contratos)
 }
 
-// NewBlockchain crea una nueva blockchain con el bloque génesis
+// NewBlockchain crea una nueva blockchain con el bloque génesis (sin persistencia)
 func NewBlockchain(difficulty int) *Blockchain {
 	// Crear el bloque génesis (bloque #0)
 	genesisBlock := NewGenesisBlock()
@@ -33,6 +42,108 @@ func NewBlockchain(difficulty int) *Blockchain {
 	}
 
 	return bc
+}
+
+// NewBlockchainWithDB crea una blockchain con persistencia estilo Ethereum
+func NewBlockchainWithDB(difficulty int, dbPath string) (*Blockchain, error) {
+	// Abrir base de datos LevelDB
+	db, err := leveldb.New(dbPath, 16, 16, "", false)
+	if err != nil {
+		return nil, fmt.Errorf("error abriendo base de datos: %v", err)
+	}
+
+	// Intentar cargar el último bloque de la DB
+	headHash, err := rawdb.ReadHeadBlockHash(db)
+	var genesisBlock *Block
+	var stateRoot []byte
+
+	if err == nil && headHash != nil {
+		// Ya existe una blockchain, cargar desde DB
+		fmt.Println("📂 Cargando blockchain existente desde disco...")
+
+		// Obtener el número del head block
+		headNumber, err := rawdb.ReadHeaderNumber(db, headHash)
+		if err != nil {
+			return nil, fmt.Errorf("error obteniendo número del head block: %v", err)
+		}
+
+		// Cargar el head block desde la DB
+		headHeader, headBody, err := rawdb.ReadBlock(db, headHash, headNumber)
+		if err != nil {
+			return nil, fmt.Errorf("error cargando head block: %v", err)
+		}
+
+		// Para simplificar, por ahora solo soportamos reabrir con el génesis
+		// TODO: Cargar toda la cadena de bloques
+		if headNumber == 0 {
+			genesisBlock = headerToBlock(headHeader, headBody)
+			stateRoot = genesisBlock.StateRoot
+			fmt.Printf("✅ Bloque génesis cargado: %s...\n", genesisBlock.Hash[:16])
+		} else {
+			return nil, fmt.Errorf("cargar blockchain con múltiples bloques no está implementado aún")
+		}
+	} else {
+		// Nueva blockchain, crear génesis
+		fmt.Println("🆕 Creando nueva blockchain con persistencia...")
+
+		genesisBlock = NewGenesisBlock()
+
+		// Crear StateDB vacío
+		stateDatabase := state.NewDatabase(db)
+		stateDB, err := state.New(nil, stateDatabase)
+		if err != nil {
+			return nil, fmt.Errorf("error creando StateDB: %v", err)
+		}
+
+		// Inicializar cuentas génesis si es necesario (opcional)
+		// Por ejemplo, dar balance inicial a una cuenta
+
+		// Calcular state root inicial
+		genesisBlock.StateRoot, err = stateDB.Commit()
+		if err != nil {
+			return nil, fmt.Errorf("error calculando state root: %v", err)
+		}
+
+		// Minar el bloque génesis
+		genesisBlock.MineBlock(difficulty)
+
+		// Persistir bloque génesis
+		if err := rawdb.WriteBlock(db, blockToHeader(genesisBlock), blockToBody(genesisBlock)); err != nil {
+			return nil, fmt.Errorf("error persistiendo bloque génesis: %v", err)
+		}
+
+		// Marcar como head block (convertir hash hex a bytes)
+		hashBytes, err := hex.DecodeString(genesisBlock.Hash)
+		if err != nil {
+			return nil, fmt.Errorf("error decodificando hash: %v", err)
+		}
+		rawdb.WriteHeadBlockHash(db, hashBytes)
+
+		stateRoot = genesisBlock.StateRoot
+	}
+
+	// Crear StateDB con el root del bloque génesis
+	stateDatabase := state.NewDatabase(db)
+	stateDB, err := state.New(stateRoot, stateDatabase)
+	if err != nil {
+		return nil, fmt.Errorf("error creando StateDB: %v", err)
+	}
+
+	// Crear la blockchain
+	bc := &Blockchain{
+		Blocks:       []*Block{genesisBlock},
+		Difficulty:   difficulty,
+		AccountState: NewAccountState(), // Mantener por compatibilidad
+		PendingTxs:   []*Transaction{},
+		Contracts:    make(map[string]*evm.Contract), // Mantener por compatibilidad
+		db:           db,
+		stateDB:      stateDB,
+	}
+
+	fmt.Printf("✅ Blockchain inicializada (dificultad: %d)\n", difficulty)
+	fmt.Printf("   State Root: %x\n", stateRoot[:16])
+
+	return bc, nil
 }
 
 // AddTransaction añade una transacción al mempool (pendientes)
@@ -68,14 +179,11 @@ func (bc *Blockchain) MineBlock() {
 		Nonce:        0,
 	}
 
-	// Minar el bloque
-	fmt.Printf("\n⛏️  Minando bloque %d (dificultad: %d, %d transacciones)...\n",
-		newBlock.Index, bc.Difficulty, len(bc.PendingTxs))
-
-	newBlock.MineBlock(bc.Difficulty)
-
-	// EJECUTAR TRANSACCIONES (incluye contratos)
+	// ====================================
+	// FASE 1: EJECUTAR TRANSACCIONES
+	// ====================================
 	fmt.Println("\n💼 Ejecutando transacciones del bloque...")
+
 	for i, tx := range bc.PendingTxs {
 		fmt.Printf("\n📝 Transacción %d/%d:\n", i+1, len(bc.PendingTxs))
 
@@ -89,10 +197,16 @@ func (bc *Blockchain) MineBlock() {
 				tx.From[:16]+"...", tx.To[:16]+"...", tx.Amount)
 		}
 
-		// Ejecutar (incluye contratos si aplica)
+		// Ejecutar en modo legacy (AccountState)
 		if err := tx.Execute(bc.AccountState, bc); err != nil {
 			fmt.Printf("   ❌ Error: %v\n", err)
 			continue
+		}
+
+		// Si tenemos StateDB, actualizar también ahí
+		if bc.stateDB != nil {
+			// TODO: Sincronizar cambios de AccountState a StateDB
+			// Por ahora, solo ejecutar en AccountState
 		}
 
 		if tx.Amount > 0 {
@@ -100,7 +214,57 @@ func (bc *Blockchain) MineBlock() {
 		}
 	}
 
-	// Añadir bloque a la cadena
+	// ====================================
+	// FASE 2: CALCULAR MERKLE ROOTS
+	// ====================================
+	if bc.stateDB != nil {
+		// Calcular State Root
+		stateRoot, err := bc.stateDB.Commit()
+		if err != nil {
+			fmt.Printf("⚠️  Error calculando state root: %v\n", err)
+			newBlock.StateRoot = make([]byte, 32)
+		} else {
+			newBlock.StateRoot = stateRoot
+			fmt.Printf("   📊 State Root: %x...\n", stateRoot[:8])
+		}
+
+		// TODO: Calcular TxRoot y ReceiptRoot
+		newBlock.TxRoot = make([]byte, 32)
+		newBlock.ReceiptRoot = make([]byte, 32)
+	} else {
+		// Modo legacy sin persistencia
+		newBlock.StateRoot = make([]byte, 32)
+		newBlock.TxRoot = make([]byte, 32)
+		newBlock.ReceiptRoot = make([]byte, 32)
+	}
+
+	// ====================================
+	// FASE 3: MINAR EL BLOQUE (Proof of Work)
+	// ====================================
+	fmt.Printf("\n⛏️  Minando bloque %d (dificultad: %d, %d transacciones)...\n",
+		newBlock.Index, bc.Difficulty, len(bc.PendingTxs))
+
+	newBlock.MineBlock(bc.Difficulty)
+
+	// ====================================
+	// FASE 4: PERSISTIR EN BASE DE DATOS
+	// ====================================
+	if bc.db != nil {
+		if err := rawdb.WriteBlock(bc.db, blockToHeader(newBlock), blockToBody(newBlock)); err != nil {
+			fmt.Printf("⚠️  Error persistiendo bloque: %v\n", err)
+		} else {
+			// Actualizar head block (convertir hash hex a bytes)
+			hashBytes, err := hex.DecodeString(newBlock.Hash)
+			if err == nil {
+				rawdb.WriteHeadBlockHash(bc.db, hashBytes)
+				fmt.Println("   💾 Bloque persistido en disco")
+			}
+		}
+	}
+
+	// ====================================
+	// FASE 5: AÑADIR A CADENA EN MEMORIA
+	// ====================================
 	bc.Blocks = append(bc.Blocks, newBlock)
 
 	// Limpiar transacciones pendientes
@@ -263,4 +427,61 @@ func (bc *Blockchain) ListContracts() {
 		fmt.Printf("   Storage:  %d keys\n", len(contract.Storage.Data))
 		i++
 	}
+}
+
+// ==================== FUNCIONES AUXILIARES DE CONVERSIÓN ====================
+
+// blockToHeader convierte nuestro Block al formato BlockHeader de ChainDB
+func blockToHeader(block *Block) *rawdb.BlockHeader {
+	// Convertir hashes de hex string a []byte
+	parentHash, _ := hex.DecodeString(block.PreviousHash)
+	if parentHash == nil {
+		parentHash = []byte(block.PreviousHash) // Para el bloque génesis que tiene "0"
+	}
+
+	hashBytes, _ := hex.DecodeString(block.Hash)
+
+	return &rawdb.BlockHeader{
+		ParentHash:  parentHash,
+		Number:      uint64(block.Index),
+		StateRoot:   block.StateRoot,
+		TxRoot:      block.TxRoot,
+		ReceiptRoot: block.ReceiptRoot,
+		Timestamp:   block.Timestamp.Unix(),
+		Difficulty:  0, // La dificultad se almacena en Blockchain, no en Block
+		Nonce:       block.Nonce,
+		Hash:        hashBytes,
+	}
+}
+
+// blockToBody convierte nuestro Block al formato BlockBody de ChainDB
+func blockToBody(block *Block) *rawdb.BlockBody {
+	// TODO: Serializar transacciones con RLP
+	// Por ahora, retornar body vacío
+	return &rawdb.BlockBody{
+		Transactions: [][]byte{},
+	}
+}
+
+// headerToBlock convierte rawdb.BlockHeader a nuestro Block
+func headerToBlock(header *rawdb.BlockHeader, body *rawdb.BlockBody) *Block {
+	return &Block{
+		Index:        int(header.Number),
+		Timestamp:    time.Unix(header.Timestamp, 0),
+		Transactions: []*Transaction{}, // TODO: Deserializar transacciones
+		PreviousHash: hex.EncodeToString(header.ParentHash),
+		Hash:         hex.EncodeToString(header.Hash),
+		Nonce:        header.Nonce,
+		StateRoot:    header.StateRoot,
+		TxRoot:       header.TxRoot,
+		ReceiptRoot:  header.ReceiptRoot,
+	}
+}
+
+// Close cierra la base de datos
+func (bc *Blockchain) Close() error {
+	if bc.db != nil {
+		return bc.db.Close()
+	}
+	return nil
 }

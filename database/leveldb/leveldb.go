@@ -105,16 +105,16 @@ func (db *Database) Close() error {
 	defer db.quitLock.Unlock()
 
 	if db.quitChan != nil {
-		// Cerrar canales
-		errc := make(chan error)
-		db.quitChan <- errc
-		if err := <-errc; err != nil {
-			db.log.Error("Error cerrando métricas", "err", err)
-		}
+		// Cerrar canal de métricas si existe
+		close(db.quitChan)
 		db.quitChan = nil
 	}
 
-	return db.db.Close()
+	if db.db != nil {
+		return db.db.Close()
+	}
+
+	return nil
 }
 
 // Has verifica si una key existe
