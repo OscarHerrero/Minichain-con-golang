@@ -110,6 +110,12 @@ func encode(w *encBuffer, val reflect.Value) error {
 		val = val.Elem()
 	}
 
+	// Manejar tipos especiales ANTES del switch
+	// big.Int debe manejarse antes porque es un struct
+	if val.Type() == reflect.TypeOf(big.Int{}) {
+		return encodeBigInt(w, val.Addr().Interface().(*big.Int))
+	}
+
 	// Codificar según tipo
 	switch val.Kind() {
 	case reflect.Bool:
@@ -139,10 +145,6 @@ func encode(w *encBuffer, val reflect.Value) error {
 		return encodeStruct(w, val)
 
 	default:
-		// Tipos especiales
-		if val.Type() == reflect.TypeOf(big.Int{}) {
-			return encodeBigInt(w, val.Addr().Interface().(*big.Int))
-		}
 		return errors.New("rlp: unsupported type " + val.Type().String())
 	}
 }

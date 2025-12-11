@@ -18,8 +18,25 @@ var (
 
 // Decode decodifica datos RLP en val
 func Decode(data []byte, val interface{}) error {
-	r := bytes.NewReader(data)
-	return DecodeFrom(r, val)
+	// Para datos completos en memoria, usar decodificación simple
+	// sin Stream para evitar problemas de EOF
+	if val == nil {
+		return errors.New("rlp: decode target is nil")
+	}
+
+	rval := reflect.ValueOf(val)
+	if rval.Kind() != reflect.Ptr || rval.IsNil() {
+		return errors.New("rlp: decode target must be a non-nil pointer")
+	}
+
+	// Crear un Stream limitado al tamaño del buffer
+	s := &Stream{
+		r:         bytes.NewReader(data),
+		remaining: uint64(len(data)),
+		limited:   true,
+	}
+
+	return s.Decode(val)
 }
 
 // DecodeFrom decodifica desde un Reader
@@ -170,6 +187,12 @@ func (s *Stream) decode(val reflect.Value) error {
 		}
 	}
 
+	// Manejar tipos especiales ANTES del switch
+	// big.Int debe manejarse antes porque es un struct
+	if val.Type() == reflect.TypeOf(big.Int{}) {
+		return s.decodeBigInt(val.Addr().Interface().(*big.Int))
+	}
+
 	// Decodificar según tipo
 	switch val.Kind() {
 	case reflect.Bool:
@@ -202,10 +225,6 @@ func (s *Stream) decode(val reflect.Value) error {
 		return s.decodeStruct(val)
 
 	default:
-		// Tipos especiales
-		if val.Type() == reflect.TypeOf(big.Int{}) {
-			return s.decodeBigInt(val.Addr().Interface().(*big.Int))
-		}
 		return fmt.Errorf("rlp: unsupported type %v (kind=%v, size=%d)", val.Type(), kind, size)
 	}
 }
@@ -362,25 +381,31 @@ func (s *Stream) decodeSlice(val reflect.Value) error {
 		return err
 	}
 
-	slice := val
-	i := 0
+	// Crear un nuevo slice vacío
+	elemType := val.Type().Elem()
+	slice := reflect.MakeSlice(val.Type(), 0, 0)
+
+	// Decodificar elementos uno por uno
 	for {
-		if err := s.decode(slice.Index(i)); err == nil {
-			i++
-			if i < slice.Len() {
-				continue
-			}
-			// Extender slice
-			newElem := reflect.New(slice.Type().Elem()).Elem()
-			slice = reflect.Append(slice, newElem)
-		} else if err == io.EOF {
+		// Crear nuevo elemento
+		elem := reflect.New(elemType).Elem()
+
+		// Intentar decodificar
+		err := s.decode(elem)
+		if err == io.EOF {
+			// Fin de la lista
 			break
-		} else {
+		}
+		if err != nil {
 			return err
 		}
+
+		// Agregar elemento al slice
+		slice = reflect.Append(slice, elem)
 	}
 
-	val.Set(slice.Slice(0, i))
+	// Asignar slice completo al valor
+	val.Set(slice)
 	return s.ListEnd()
 }
 
