@@ -44,6 +44,28 @@ func (s *Storage) Load(key *big.Int) *big.Int {
 	return new(big.Int).Set(value)
 }
 
+// CreateSnapshot crea un snapshot del storage
+func (s *Storage) CreateSnapshot() map[string]*big.Int {
+	snapshot := make(map[string]*big.Int)
+
+	for key, value := range s.Data {
+		snapshot[key] = new(big.Int).Set(value)
+	}
+
+	return snapshot
+}
+
+// RevertToSnapshot revierte el storage a un snapshot
+func (s *Storage) RevertToSnapshot(snapshot map[string]*big.Int) {
+	// Limpiar storage actual
+	s.Data = make(map[string]*big.Int)
+
+	// Restaurar desde snapshot
+	for key, value := range snapshot {
+		s.Data[key] = new(big.Int).Set(value)
+	}
+}
+
 // Print muestra el contenido del storage
 func (s *Storage) Print() {
 	fmt.Println("\n╔════════════════════════════════════════╗")

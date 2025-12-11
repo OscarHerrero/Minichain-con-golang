@@ -65,17 +65,52 @@ func (as *AccountState) IncrementNonce(address string) {
 	account.Nonce++
 }
 
+// StateSnapshot guarda un snapshot del estado de cuentas
+type StateSnapshot struct {
+	Accounts map[string]*Account
+}
+
+// CreateSnapshot crea un snapshot del estado actual
+func (as *AccountState) CreateSnapshot() *StateSnapshot {
+	snapshot := &StateSnapshot{
+		Accounts: make(map[string]*Account),
+	}
+
+	// Copiar todas las cuentas
+	for address, account := range as.Accounts {
+		snapshot.Accounts[address] = &Account{
+			Address: account.Address,
+			Balance: account.Balance,
+			Nonce:   account.Nonce,
+		}
+	}
+
+	return snapshot
+}
+
+// RevertToSnapshot revierte el estado a un snapshot
+func (as *AccountState) RevertToSnapshot(snapshot *StateSnapshot) {
+	// Restaurar cuentas
+	for address, account := range snapshot.Accounts {
+		as.Accounts[address] = &Account{
+			Address: account.Address,
+			Balance: account.Balance,
+			Nonce:   account.Nonce,
+		}
+	}
+}
+
 // Print muestra el estado de todas las cuentas
 func (as *AccountState) Print() {
 	fmt.Println("\n╔════════════════════════════════════════╗")
 	fmt.Println("║         ESTADO DE CUENTAS              ║")
 	fmt.Println("╚════════════════════════════════════════╝")
-	
+
 	if len(as.Accounts) == 0 {
 		fmt.Println("   (No hay cuentas)")
 		return
 	}
-	
+
 	for address, account := range as.Accounts {
 		fmt.Printf("\n📍 %s\n", address)
 		fmt.Printf("   💰 Saldo: %.2f MTC\n", account.Balance)

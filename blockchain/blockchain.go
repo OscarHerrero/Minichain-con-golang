@@ -234,12 +234,12 @@ func (bc *Blockchain) ExecuteContract(address string, gas uint64) error {
 
 	fmt.Printf("\n⚙️  Ejecutando contrato %s...\n", address[:16]+"...")
 
-	vm, err := contract.Execute(gas)
+	remainingGas, err := contract.Execute(gas)
 	if err != nil {
 		return fmt.Errorf("error ejecutando contrato: %v", err)
 	}
 
-	fmt.Printf("✅ Contrato ejecutado. Gas usado: %d\n", gas-vm.Gas)
+	fmt.Printf("✅ Contrato ejecutado. Gas usado: %d\n", gas-remainingGas)
 
 	return nil
 }

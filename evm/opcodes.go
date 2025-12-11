@@ -13,12 +13,12 @@ const (
 	SUB  OpCode = 0x03 // Resta: a - b
 	DIV  OpCode = 0x04 // División: a / b
 	MOD  OpCode = 0x06 // Módulo: a % b
-	
+
 	// 0x10 range - Comparaciones
-	LT  OpCode = 0x10 // Menor que: a < b
-	GT  OpCode = 0x11 // Mayor que: a > b
-	EQ  OpCode = 0x14 // Igual: a == b
-	
+	LT OpCode = 0x10 // Menor que: a < b
+	GT OpCode = 0x11 // Mayor que: a > b
+	EQ OpCode = 0x14 // Igual: a == b
+
 	// 0x50 range - Stack, Memory, Storage
 	POP    OpCode = 0x50 // Sacar de la pila
 	MLOAD  OpCode = 0x51 // Cargar de memoria
@@ -28,7 +28,7 @@ const (
 	JUMP   OpCode = 0x56 // Salto incondicional
 	JUMPI  OpCode = 0x57 // Salto condicional
 	PC     OpCode = 0x58 // Program counter (posición actual)
-	
+
 	// 0x60 range - Push
 	PUSH1  OpCode = 0x60 // Push 1 byte
 	PUSH2  OpCode = 0x61 // Push 2 bytes
@@ -36,15 +36,15 @@ const (
 	PUSH4  OpCode = 0x63 // Push 4 bytes
 	PUSH5  OpCode = 0x64 // Push 5 bytes
 	PUSH32 OpCode = 0x7f // Push 32 bytes
-	
+
 	// 0x80 range - Duplicar
 	DUP1 OpCode = 0x80 // Duplicar el 1er elemento
 	DUP2 OpCode = 0x81 // Duplicar el 2do elemento
-	
+
 	// 0x90 range - Intercambiar
 	SWAP1 OpCode = 0x90 // Intercambiar 1er y 2do elemento
 	SWAP2 OpCode = 0x91 // Intercambiar 1er y 3er elemento
-	
+
 	// 0xf0 range - System
 	RETURN OpCode = 0xf3 // Retornar datos
 )
@@ -102,6 +102,11 @@ func (op OpCode) PushSize() int {
 	return 0
 }
 
+// IsJump verifica si el opcode es un salto
+func (op OpCode) IsJump() bool {
+	return op == JUMP || op == JUMPI
+}
+
 // gasCosts define el costo en gas de cada operación
 var gasCosts = map[OpCode]uint64{
 	STOP:   0,
@@ -116,8 +121,8 @@ var gasCosts = map[OpCode]uint64{
 	POP:    2,
 	MLOAD:  3,
 	MSTORE: 3,
-	SLOAD:  200,    // Leer storage es caro
-	SSTORE: 20000,  // Escribir storage es MUY caro
+	SLOAD:  200,   // Leer storage es caro
+	SSTORE: 20000, // Escribir storage es MUY caro
 	JUMP:   8,
 	JUMPI:  10,
 	PC:     2,

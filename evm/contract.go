@@ -31,44 +31,51 @@ func NewContract(owner string, bytecode []byte) *Contract {
 	}
 }
 
-// Execute ejecuta el bytecode del contrato
-func (c *Contract) Execute(gas uint64) (*VM, error) {
-	// Crear una VM con el bytecode del contrato
-	vm := &VM{
-		Stack:   NewStack(),
-		Memory:  NewMemory(),
-		Storage: c.Storage, // ← USA DIRECTAMENTE el storage del contrato
-		Code:    c.Bytecode,
-		PC:      0,
-		Gas:     gas,
-		Stopped: false,
+// Execute ejecuta el bytecode del contrato usando el intérprete global
+func (c *Contract) Execute(gas uint64) (uint64, error) {
+	// Crear contexto de ejecución
+	ctx := &ExecutionContext{
+		Stack:    NewStack(),
+		Memory:   NewMemory(),
+		Storage:  c.Storage,  // Referencia al storage del contrato
+		Code:     c.Bytecode,
+		PC:       0,
+		Gas:      gas,
+		Stopped:  false,
+		Verbose:  true,
+		Contract: c,
 	}
-
-	// Ejecutar
-	if err := vm.Run(); err != nil {
-		return nil, err
+	
+	// Ejecutar con el intérprete global
+	if err := GlobalInterpreter.Run(ctx); err != nil {
+		return 0, err
 	}
-
-	return vm, nil
+	
+	// Devolver gas restante
+	return ctx.Gas, nil
 }
 
 // Call simula llamar a una función del contrato con datos
-func (c *Contract) Call(calldata []byte, gas uint64) (*VM, error) {
-	vm := &VM{
-		Stack:   NewStack(),
-		Memory:  NewMemory(),
-		Storage: c.Storage, // ← USA el storage del contrato
-		Code:    c.Bytecode,
-		PC:      0,
-		Gas:     gas,
-		Stopped: false,
+func (c *Contract) Call(calldata []byte, gas uint64) (uint64, error) {
+	// Crear contexto de ejecución
+	ctx := &ExecutionContext{
+		Stack:    NewStack(),
+		Memory:   NewMemory(),
+		Storage:  c.Storage,
+		Code:     c.Bytecode,
+		PC:       0,
+		Gas:      gas,
+		Stopped:  false,
+		Verbose:  true,
+		Contract: c,
 	}
-
-	if err := vm.Run(); err != nil {
-		return nil, err
+	
+	// Ejecutar con el intérprete global
+	if err := GlobalInterpreter.Run(ctx); err != nil {
+		return 0, err
 	}
-
-	return vm, nil
+	
+	return ctx.Gas, nil
 }
 
 // GetStorageValue obtiene un valor del storage del contrato
