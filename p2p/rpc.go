@@ -4,7 +4,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"log"
+	"math/big"
 	"minichain/blockchain"
+	"minichain/crypto"
 	"net/http"
 )
 
@@ -50,10 +52,14 @@ func (rpc *RPCServer) Start() error {
 
 // TxRequest es la estructura de una transacción recibida por RPC
 type TxRequest struct {
-	From   string  `json:"from"`
-	To     string  `json:"to"`
-	Amount float64 `json:"amount"`
-	Data   string  `json:"data"`
+	From       string      `json:"from"`
+	To         string      `json:"to"`
+	Amount     float64     `json:"amount"`
+	Nonce      int         `json:"nonce"`
+	Data       string      `json:"data"`
+	Signature  string      `json:"signature"`
+	PublicKeyX interface{} `json:"publicKeyX"` // big.Int se serializa como string/number
+	PublicKeyY interface{} `json:"publicKeyY"`
 }
 
 // handleTransaction maneja el endpoint POST /tx
@@ -77,22 +83,62 @@ func (rpc *RPCServer) handleTransaction(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	// Parsear big.Int desde interface{}
+	var pubKeyX, pubKeyY *big.Int
+
+	if txReq.PublicKeyX != nil {
+		pubKeyX = new(big.Int)
+		switch v := txReq.PublicKeyX.(type) {
+		case string:
+			pubKeyX.SetString(v, 10)
+		case float64:
+			pubKeyX.SetInt64(int64(v))
+		}
+	}
+
+	if txReq.PublicKeyY != nil {
+		pubKeyY = new(big.Int)
+		switch v := txReq.PublicKeyY.(type) {
+		case string:
+			pubKeyY.SetString(v, 10)
+		case float64:
+			pubKeyY.SetInt64(int64(v))
+		}
+	}
+
 	// Crear transacción
 	tx := &blockchain.Transaction{
-		From:   txReq.From,
-		To:     txReq.To,
-		Amount: txReq.Amount,
-		Nonce:  0, // TODO: Calcular nonce correcto
-		Data:   []byte{},
+		From:       txReq.From,
+		To:         txReq.To,
+		Amount:     txReq.Amount,
+		Nonce:      txReq.Nonce,
+		Data:       []byte{},
+		Signature:  txReq.Signature,
+		PublicKeyX: pubKeyX,
+		PublicKeyY: pubKeyY,
 	}
 
 	// Parsear data si existe
 	if txReq.Data != "" {
-		// TODO: Convertir hex string a bytes
 		tx.Data = []byte(txReq.Data)
 	}
 
-	// Agregar al mempool (sin validación para simplificar por ahora)
+	// Verificar firma si está presente
+	if tx.Signature != "" && tx.PublicKeyX != nil && tx.PublicKeyY != nil {
+		// Reconstruir datos para verificar
+		txData := fmt.Sprintf("%s%s%.2f%d%s", tx.From, tx.To, tx.Amount, tx.Nonce, string(tx.Data))
+
+		// Verificar firma usando la función del paquete crypto
+		if !crypto.VerifySignature(tx.PublicKeyX, tx.PublicKeyY, []byte(txData), tx.Signature) {
+			http.Error(w, "❌ Firma inválida", http.StatusBadRequest)
+			log.Printf("❌ Transacción rechazada - firma inválida: %s → %s", tx.From, tx.To)
+			return
+		}
+
+		log.Printf("✅ Firma verificada correctamente")
+	}
+
+	// Agregar al mempool
 	rpc.blockchain.PendingTxs = append(rpc.blockchain.PendingTxs, tx)
 
 	log.Printf("📥 Transacción recibida por RPC: %s → %s (%.2f MTC)",

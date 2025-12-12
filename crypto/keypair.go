@@ -105,3 +105,31 @@ func (kp *KeyPair) Print() {
 	fmt.Printf("                   Y=%s...\n", kp.PublicKey.Y.Text(16)[:16])
 	fmt.Println("⚠️  Clave privada: [OCULTA - Nunca compartir]")
 }
+
+// GetPrivateKeyHex retorna la clave privada en formato hexadecimal
+func (kp *KeyPair) GetPrivateKeyHex() string {
+	return hex.EncodeToString(kp.PrivateKey.D.Bytes())
+}
+
+// LoadFromPrivateKeyHex carga un KeyPair desde una clave privada en hex
+func LoadFromPrivateKeyHex(privateKeyHex string) (*KeyPair, error) {
+	// Decodificar hex
+	privateKeyBytes, err := hex.DecodeString(privateKeyHex)
+	if err != nil {
+		return nil, fmt.Errorf("error decodificando clave privada: %v", err)
+	}
+
+	// Crear clave privada
+	privateKey := new(ecdsa.PrivateKey)
+	privateKey.D = new(big.Int).SetBytes(privateKeyBytes)
+	privateKey.PublicKey.Curve = elliptic.P256()
+
+	// Derivar clave pública desde la privada
+	privateKey.PublicKey.X, privateKey.PublicKey.Y = privateKey.PublicKey.Curve.ScalarBaseMult(privateKeyBytes)
+
+	return &KeyPair{
+		PrivateKey: privateKey,
+		PublicKey:  &privateKey.PublicKey,
+	}, nil
+}
+
