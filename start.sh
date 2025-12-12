@@ -29,24 +29,33 @@ case $option in
         rm -rf ./node1 ./node2 ./node3 2>/dev/null
 
         # Iniciar nodo 1 (Bootstrap)
-        echo "📍 Nodo 1 (Bootstrap) iniciando en puerto 3000..."
-        ./minichain-node --port 3000 --datadir ./node1 > node1.log 2>&1 &
+        echo "📍 Nodo 1 (Bootstrap) - P2P:3000 RPC:8545..."
+        ./minichain-node --port 3000 --rpc 8545 --datadir ./node1 > node1.log 2>&1 &
         sleep 2
 
         # Iniciar nodo 2
-        echo "📍 Nodo 2 iniciando en puerto 3001..."
-        ./minichain-node --port 3001 --datadir ./node2 --bootstrap localhost:3000 > node2.log 2>&1 &
+        echo "📍 Nodo 2 - P2P:3001 RPC:8546..."
+        ./minichain-node --port 3001 --rpc 8546 --datadir ./node2 --bootstrap localhost:3000 > node2.log 2>&1 &
         sleep 1
 
         # Iniciar nodo 3
-        echo "📍 Nodo 3 iniciando en puerto 3002..."
-        ./minichain-node --port 3002 --datadir ./node3 --bootstrap localhost:3000 > node3.log 2>&1 &
+        echo "📍 Nodo 3 - P2P:3002 RPC:8547..."
+        ./minichain-node --port 3002 --rpc 8547 --datadir ./node3 --bootstrap localhost:3000 > node3.log 2>&1 &
         sleep 1
 
         echo ""
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         echo "✅ ¡3 NODOS EN MARCHA!"
         echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        echo ""
+        echo "Los nodos están corriendo con los siguientes puertos:"
+        echo "  • Nodo 1: P2P=3000  RPC=http://localhost:8545"
+        echo "  • Nodo 2: P2P=3001  RPC=http://localhost:8546"
+        echo "  • Nodo 3: P2P=3002  RPC=http://localhost:8547"
+        echo ""
+        echo "Para enviar transacciones:"
+        echo "  ./minichain-sendtx --from Alice --to Bob --amount 10"
+        echo "  ./minichain-sendtx --from Alice --to Bob --amount 10 --rpc http://localhost:8546"
         echo ""
         echo "Ver logs en tiempo real:"
         echo "  Nodo 1: tail -f node1.log"

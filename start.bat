@@ -35,18 +35,18 @@ if exist node2 rmdir /s /q node2
 if exist node3 rmdir /s /q node3
 
 REM Iniciar nodo 1 (Bootstrap)
-echo 📍 Nodo 1 (Bootstrap) iniciando en puerto 3000...
-start "Minichain Node 1" cmd /k "minichain-node.exe --port 3000 --datadir ./node1"
+echo 📍 Nodo 1 (Bootstrap) - P2P:3000 RPC:8545...
+start "Minichain Node 1" cmd /k "minichain-node.exe --port 3000 --rpc 8545 --datadir ./node1"
 timeout /t 3 /nobreak >nul
 
 REM Iniciar nodo 2
-echo 📍 Nodo 2 iniciando en puerto 3001...
-start "Minichain Node 2" cmd /k "minichain-node.exe --port 3001 --datadir ./node2 --bootstrap localhost:3000"
+echo 📍 Nodo 2 - P2P:3001 RPC:8546...
+start "Minichain Node 2" cmd /k "minichain-node.exe --port 3001 --rpc 8546 --datadir ./node2 --bootstrap localhost:3000"
 timeout /t 2 /nobreak >nul
 
 REM Iniciar nodo 3
-echo 📍 Nodo 3 iniciando en puerto 3002...
-start "Minichain Node 3" cmd /k "minichain-node.exe --port 3002 --datadir ./node3 --bootstrap localhost:3000"
+echo 📍 Nodo 3 - P2P:3002 RPC:8547...
+start "Minichain Node 3" cmd /k "minichain-node.exe --port 3002 --rpc 8547 --datadir ./node3 --bootstrap localhost:3000"
 timeout /t 1 /nobreak >nul
 
 echo.
@@ -54,7 +54,14 @@ echo ━━━━━━━━━━━━━━━━━━━━━━━━━
 echo ✅ ¡3 NODOS EN MARCHA EN VENTANAS SEPARADAS!
 echo ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 echo.
-echo Los nodos están corriendo en ventanas separadas.
+echo Los nodos están corriendo en ventanas separadas:
+echo   • Nodo 1: P2P=3000  RPC=http://localhost:8545
+echo   • Nodo 2: P2P=3001  RPC=http://localhost:8546
+echo   • Nodo 3: P2P=3002  RPC=http://localhost:8547
+echo.
+echo Para enviar transacciones:
+echo   minichain-sendtx.exe --from Alice --to Bob --amount 10
+echo   minichain-sendtx.exe --from Alice --to Bob --amount 10 --rpc http://localhost:8546
 echo.
 echo Para detener:
 echo   - Cierra cada ventana (Ctrl+C en cada una)

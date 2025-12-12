@@ -29,18 +29,18 @@ switch ($option) {
         if (Test-Path "node3") { Remove-Item -Recurse -Force node3 }
 
         # Iniciar nodo 1 (Bootstrap)
-        Write-Host "📍 Nodo 1 (Bootstrap) iniciando en puerto 3000..." -ForegroundColor Yellow
-        Start-Process powershell -ArgumentList "-NoExit", "-Command", ".\minichain-node.exe --port 3000 --datadir ./node1" -WindowStyle Normal
+        Write-Host "📍 Nodo 1 (Bootstrap) - P2P:3000 RPC:8545..." -ForegroundColor Yellow
+        Start-Process powershell -ArgumentList "-NoExit", "-Command", ".\minichain-node.exe --port 3000 --rpc 8545 --datadir ./node1" -WindowStyle Normal
         Start-Sleep -Seconds 3
 
         # Iniciar nodo 2
-        Write-Host "📍 Nodo 2 iniciando en puerto 3001..." -ForegroundColor Yellow
-        Start-Process powershell -ArgumentList "-NoExit", "-Command", ".\minichain-node.exe --port 3001 --datadir ./node2 --bootstrap localhost:3000" -WindowStyle Normal
+        Write-Host "📍 Nodo 2 - P2P:3001 RPC:8546..." -ForegroundColor Yellow
+        Start-Process powershell -ArgumentList "-NoExit", "-Command", ".\minichain-node.exe --port 3001 --rpc 8546 --datadir ./node2 --bootstrap localhost:3000" -WindowStyle Normal
         Start-Sleep -Seconds 2
 
         # Iniciar nodo 3
-        Write-Host "📍 Nodo 3 iniciando en puerto 3002..." -ForegroundColor Yellow
-        Start-Process powershell -ArgumentList "-NoExit", "-Command", ".\minichain-node.exe --port 3002 --datadir ./node3 --bootstrap localhost:3000" -WindowStyle Normal
+        Write-Host "📍 Nodo 3 - P2P:3002 RPC:8547..." -ForegroundColor Yellow
+        Start-Process powershell -ArgumentList "-NoExit", "-Command", ".\minichain-node.exe --port 3002 --rpc 8547 --datadir ./node3 --bootstrap localhost:3000" -WindowStyle Normal
         Start-Sleep -Seconds 1
 
         Write-Host ""
@@ -48,7 +48,14 @@ switch ($option) {
         Write-Host "✅ ¡3 NODOS EN MARCHA EN VENTANAS SEPARADAS!" -ForegroundColor Green
         Write-Host "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━" -ForegroundColor Green
         Write-Host ""
-        Write-Host "Los nodos están corriendo en ventanas PowerShell separadas."
+        Write-Host "Los nodos están corriendo en ventanas PowerShell separadas:"
+        Write-Host "  • Nodo 1: P2P=3000  RPC=http://localhost:8545"
+        Write-Host "  • Nodo 2: P2P=3001  RPC=http://localhost:8546"
+        Write-Host "  • Nodo 3: P2P=3002  RPC=http://localhost:8547"
+        Write-Host ""
+        Write-Host "Para enviar transacciones:"
+        Write-Host "  .\minichain-sendtx.exe --from Alice --to Bob --amount 10"
+        Write-Host "  .\minichain-sendtx.exe --from Alice --to Bob --amount 10 --rpc http://localhost:8546"
         Write-Host ""
         Write-Host "Para detener:"
         Write-Host "  - Cierra cada ventana (Ctrl+C en cada una)"
