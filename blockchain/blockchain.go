@@ -551,3 +551,18 @@ func (bc *Blockchain) Close() error {
 	}
 	return nil
 }
+
+// GetDB retorna la base de datos (para persistencia desde p2p)
+func (bc *Blockchain) GetDB() database.Database {
+	return bc.db
+}
+
+// ConvertBlockToHeader expone blockToHeader como método público
+func (bc *Blockchain) ConvertBlockToHeader(block *Block) *rawdb.BlockHeader {
+	return blockToHeader(block)
+}
+
+// ConvertBlockToBody expone blockToBody como método público
+func (bc *Blockchain) ConvertBlockToBody(block *Block) *rawdb.BlockBody {
+	return blockToBody(block)
+}

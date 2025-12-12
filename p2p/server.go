@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"minichain/blockchain"
+	"minichain/core/rawdb"
 	"net"
 	"strings"
 	"sync"
@@ -559,9 +560,28 @@ func (s *Server) mineBlockWithCancellation() *blockchain.Block {
 	// Limpiar transacciones pendientes
 	s.blockchain.PendingTxs = []*blockchain.Transaction{}
 
-	// Persistir si tenemos DB
-	if s.blockchain != nil {
-		// TODO: Persistir con rawdb
+	// Persistir bloque en base de datos
+	if s.blockchain != nil && s.blockchain.GetDB() != nil {
+		db := s.blockchain.GetDB()
+
+		// Convertir el bloque al formato de persistencia
+		header := s.blockchain.ConvertBlockToHeader(newBlock)
+		body := s.blockchain.ConvertBlockToBody(newBlock)
+
+		// Guardar en la base de datos
+		if err := rawdb.WriteBlock(db, header, body); err != nil {
+			log.Printf("⚠️  Error persistiendo bloque: %v\n", err)
+		} else {
+			// Convertir hash hex a bytes
+			hashBytes, err := hex.DecodeString(newBlock.Hash)
+			if err == nil {
+				// Escribir hash canónico (altura -> hash)
+				rawdb.WriteCanonicalHash(db, hashBytes, uint64(newBlock.Index))
+				// Actualizar head block
+				rawdb.WriteHeadBlockHash(db, hashBytes)
+				log.Printf("💾 Bloque %d persistido en disco\n", newBlock.Index)
+			}
+		}
 	}
 
 	return newBlock
