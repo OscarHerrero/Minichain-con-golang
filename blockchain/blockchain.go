@@ -2,6 +2,7 @@ package blockchain
 
 import (
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"minichain/core/rawdb"
 	"minichain/core/state"
@@ -56,6 +57,7 @@ func NewBlockchainWithDB(difficulty int, dbPath string) (*Blockchain, error) {
 	headHash, err := rawdb.ReadHeadBlockHash(db)
 	var genesisBlock *Block
 	var stateRoot []byte
+	var blocks []*Block
 
 	if err == nil && headHash != nil {
 		// Ya existe una blockchain, cargar desde DB
@@ -67,21 +69,38 @@ func NewBlockchainWithDB(difficulty int, dbPath string) (*Blockchain, error) {
 			return nil, fmt.Errorf("error obteniendo número del head block: %v", err)
 		}
 
-		// Cargar el head block desde la DB
-		headHeader, headBody, err := rawdb.ReadBlock(db, headHash, headNumber)
-		if err != nil {
-			return nil, fmt.Errorf("error cargando head block: %v", err)
+		// Cargar TODOS los bloques desde el génesis hasta el head
+		fmt.Printf("📥 Cargando %d bloques desde disco...\n", headNumber+1)
+
+		blocks = make([]*Block, 0, headNumber+1)
+
+		// Cargar cada bloque en orden (0 hasta headNumber)
+		for i := uint64(0); i <= headNumber; i++ {
+			// Obtener hash del bloque en esta altura
+			blockHash, err := rawdb.ReadCanonicalHash(db, i)
+			if err != nil || blockHash == nil {
+				return nil, fmt.Errorf("no se encontró hash canónico para bloque #%d: %v", i, err)
+			}
+
+			// Leer el bloque
+			header, body, err := rawdb.ReadBlock(db, blockHash, i)
+			if err != nil {
+				return nil, fmt.Errorf("error cargando bloque #%d: %v", i, err)
+			}
+
+			// Convertir a nuestro formato
+			block := headerToBlock(header, body)
+			blocks = append(blocks, block)
+
+			if i%100 == 0 || i == headNumber {
+				fmt.Printf("   ✅ Cargados %d/%d bloques...\n", i+1, headNumber+1)
+			}
 		}
 
-		// Para simplificar, por ahora solo soportamos reabrir con el génesis
-		// TODO: Cargar toda la cadena de bloques
-		if headNumber == 0 {
-			genesisBlock = headerToBlock(headHeader, headBody)
-			stateRoot = genesisBlock.StateRoot
-			fmt.Printf("✅ Bloque génesis cargado: %s...\n", genesisBlock.Hash[:16])
-		} else {
-			return nil, fmt.Errorf("cargar blockchain con múltiples bloques no está implementado aún")
-		}
+		genesisBlock = blocks[0]
+		stateRoot = blocks[len(blocks)-1].StateRoot
+
+		fmt.Printf("✅ Blockchain cargada: %d bloques (altura: %d)\n", len(blocks), headNumber)
 	} else {
 		// Nueva blockchain, crear génesis
 		fmt.Println("🆕 Creando nueva blockchain con persistencia...")
@@ -117,9 +136,13 @@ func NewBlockchainWithDB(difficulty int, dbPath string) (*Blockchain, error) {
 		if err != nil {
 			return nil, fmt.Errorf("error decodificando hash: %v", err)
 		}
+		// Escribir hash canónico para el génesis (altura 0 -> hash)
+		rawdb.WriteCanonicalHash(db, hashBytes, 0)
+		// Actualizar head block
 		rawdb.WriteHeadBlockHash(db, hashBytes)
 
 		stateRoot = genesisBlock.StateRoot
+		blocks = []*Block{genesisBlock}
 	}
 
 	// Crear StateDB con el root del bloque génesis
@@ -131,13 +154,33 @@ func NewBlockchainWithDB(difficulty int, dbPath string) (*Blockchain, error) {
 
 	// Crear la blockchain
 	bc := &Blockchain{
-		Blocks:       []*Block{genesisBlock},
+		Blocks:       blocks,
 		Difficulty:   difficulty,
 		AccountState: NewAccountState(), // Mantener por compatibilidad
 		PendingTxs:   []*Transaction{},
 		Contracts:    make(map[string]*evm.Contract), // Mantener por compatibilidad
 		db:           db,
 		stateDB:      stateDB,
+	}
+
+	// Si cargamos desde disco, re-ejecutar transacciones para reconstruir AccountState
+	if len(blocks) > 1 {
+		fmt.Printf("💼 Re-ejecutando transacciones para reconstruir estado...\n")
+		totalTxs := 0
+		for i, block := range blocks {
+			if i == 0 {
+				continue // Saltar génesis
+			}
+			for _, tx := range block.Transactions {
+				if err := tx.Execute(bc.AccountState, bc); err != nil {
+					fmt.Printf("   ⚠️  Error re-ejecutando tx en bloque #%d: %v\n", i, err)
+				}
+				totalTxs++
+			}
+		}
+		if totalTxs > 0 {
+			fmt.Printf("✅ Estado reconstruido (%d transacciones procesadas)\n", totalTxs)
+		}
 	}
 
 	fmt.Printf("✅ Blockchain inicializada (dificultad: %d)\n", difficulty)
@@ -253,9 +296,12 @@ func (bc *Blockchain) MineBlock() {
 		if err := rawdb.WriteBlock(bc.db, blockToHeader(newBlock), blockToBody(newBlock)); err != nil {
 			fmt.Printf("⚠️  Error persistiendo bloque: %v\n", err)
 		} else {
-			// Actualizar head block (convertir hash hex a bytes)
+			// Convertir hash hex a bytes
 			hashBytes, err := hex.DecodeString(newBlock.Hash)
 			if err == nil {
+				// Escribir hash canónico (altura -> hash)
+				rawdb.WriteCanonicalHash(bc.db, hashBytes, uint64(newBlock.Index))
+				// Actualizar head block
 				rawdb.WriteHeadBlockHash(bc.db, hashBytes)
 				fmt.Println("   💾 Bloque persistido en disco")
 			}
@@ -456,19 +502,39 @@ func blockToHeader(block *Block) *rawdb.BlockHeader {
 
 // blockToBody convierte nuestro Block al formato BlockBody de ChainDB
 func blockToBody(block *Block) *rawdb.BlockBody {
-	// TODO: Serializar transacciones con RLP
-	// Por ahora, retornar body vacío
+	// Serializar cada transacción a JSON
+	txBytes := make([][]byte, len(block.Transactions))
+	for i, tx := range block.Transactions {
+		txData, err := json.Marshal(tx)
+		if err != nil {
+			fmt.Printf("⚠️  Error serializando transacción %d: %v\n", i, err)
+			continue
+		}
+		txBytes[i] = txData
+	}
+
 	return &rawdb.BlockBody{
-		Transactions: [][]byte{},
+		Transactions: txBytes,
 	}
 }
 
 // headerToBlock convierte rawdb.BlockHeader a nuestro Block
 func headerToBlock(header *rawdb.BlockHeader, body *rawdb.BlockBody) *Block {
+	// Deserializar transacciones desde JSON
+	transactions := make([]*Transaction, 0, len(body.Transactions))
+	for i, txData := range body.Transactions {
+		var tx Transaction
+		if err := json.Unmarshal(txData, &tx); err != nil {
+			fmt.Printf("⚠️  Error deserializando transacción %d: %v\n", i, err)
+			continue
+		}
+		transactions = append(transactions, &tx)
+	}
+
 	return &Block{
 		Index:        int(header.Number),
 		Timestamp:    time.Unix(header.Timestamp, 0),
-		Transactions: []*Transaction{}, // TODO: Deserializar transacciones
+		Transactions: transactions,
 		PreviousHash: hex.EncodeToString(header.ParentHash),
 		Hash:         hex.EncodeToString(header.Hash),
 		Nonce:        header.Nonce,
