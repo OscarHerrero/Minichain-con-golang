@@ -43,8 +43,14 @@ func (p *Peer) String() string {
 		direction = "incoming"
 	}
 
+	// Truncar nodeID de forma segura
+	nodeIDStr := p.nodeID
+	if len(nodeIDStr) > 8 {
+		nodeIDStr = nodeIDStr[:8]
+	}
+
 	return fmt.Sprintf("Peer{addr=%s, nodeID=%s, height=%d, %s}",
-		p.address, p.nodeID[:8], p.bestHeight, direction)
+		p.address, nodeIDStr, p.bestHeight, direction)
 }
 
 // SendMessage envía un mensaje al peer

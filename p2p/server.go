@@ -28,6 +28,14 @@ type Server struct {
 	onNewBlock func(*blockchain.Block) // Callback cuando hay nuevo bloque
 }
 
+// truncateAddr trunca una dirección de forma segura para logging
+func truncateAddr(addr string, maxLen int) string {
+	if len(addr) <= maxLen {
+		return addr
+	}
+	return addr[:maxLen] + "..."
+}
+
 // NewServer crea un nuevo servidor P2P
 func NewServer(host string, port int, bc *blockchain.Blockchain) *Server {
 	// Generar ID único para este nodo
@@ -63,7 +71,7 @@ func (s *Server) Start() error {
 
 	s.listener = listener
 
-	log.Printf("🌐 Servidor P2P iniciado en %s (NodeID: %s)", addr, s.nodeID[:16])
+	log.Printf("🌐 Servidor P2P iniciado en %s (NodeID: %s)", addr, truncateAddr(s.nodeID, 16))
 
 	// Iniciar goroutine para aceptar conexiones
 	s.wg.Add(1)
@@ -265,7 +273,7 @@ func (s *Server) handleMessage(peer *Peer, msg *Message) error {
 			return fmt.Errorf("error decodificando blockchain info: %v", err)
 		}
 
-		log.Printf("📊 Peer %s tiene blockchain con altura %d", peer.GetAddress()[:15], info.Height)
+		log.Printf("📊 Peer %s tiene blockchain con altura %d", truncateAddr(peer.GetAddress(), 20), info.Height)
 
 		// Actualizar altura del peer
 		peer.mu.Lock()
