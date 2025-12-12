@@ -33,6 +33,10 @@ type Server struct {
 	miningMu    sync.Mutex // Mutex para controlar minado
 	stopMining  chan struct{}
 	newBlockCh  chan *blockchain.Block // Canal para notificar bloques nuevos
+
+	// Cache de transacciones vistas (para evitar loops de propagación)
+	seenTxs   map[string]bool // Hash de transacción -> visto
+	seenTxsMu sync.RWMutex    // Mutex para seenTxs
 }
 
 // truncateAddr trunca una dirección de forma segura para logging
@@ -59,6 +63,7 @@ func NewServer(host string, port int, bc *blockchain.Blockchain) *Server {
 		maxPeers:   25, // Máximo 25 peers
 		stopMining: make(chan struct{}),
 		newBlockCh: make(chan *blockchain.Block, 10),
+		seenTxs:    make(map[string]bool),
 	}
 }
 
@@ -306,8 +311,37 @@ func (s *Server) handleMessage(peer *Peer, msg *Message) error {
 
 	case MsgNewTransaction:
 		// Recibida nueva transacción
-		// TODO: Deserializar y agregar al mempool
-		log.Printf("💸 Nueva transacción recibida de %s", peer.GetAddress())
+		var tx blockchain.Transaction
+		if err := json.Unmarshal(msg.Payload, &tx); err != nil {
+			return fmt.Errorf("error decodificando transacción: %v", err)
+		}
+
+		log.Printf("💸 Nueva transacción recibida de %s: %s → %s (%.2f MTC)",
+			peer.GetAddress(), tx.From, tx.To, tx.Amount)
+
+		// Calcular hash para verificar si ya la vimos
+		txHash := calculateTxHash(&tx)
+
+		s.seenTxsMu.Lock()
+		alreadySeen := s.seenTxs[txHash]
+		if !alreadySeen {
+			s.seenTxs[txHash] = true
+		}
+		s.seenTxsMu.Unlock()
+
+		if alreadySeen {
+			// Ya vimos esta transacción, no hacer nada
+			return nil
+		}
+
+		// Agregar al mempool
+		s.blockchain.PendingTxs = append(s.blockchain.PendingTxs, &tx)
+
+		log.Printf("   ✅ Transacción agregada al mempool (total: %d pendientes)", len(s.blockchain.PendingTxs))
+
+		// Propagar a otros peers (excepto el que nos la envió)
+		s.BroadcastTransactionExcept(&tx, peer)
+
 		return nil
 
 	default:
@@ -655,6 +689,99 @@ func (s *Server) BroadcastBlockExcept(block *blockchain.Block, except *Peer) {
 
 	if propagatedCount > 0 {
 		log.Printf("📡 Bloque #%d propagado a %d peers adicionales", block.Index, propagatedCount)
+	}
+}
+
+// calculateTxHash calcula un hash simple de una transacción
+func calculateTxHash(tx *blockchain.Transaction) string {
+	data := fmt.Sprintf("%s:%s:%.2f:%d", tx.From, tx.To, tx.Amount, tx.Nonce)
+	return fmt.Sprintf("%x", []byte(data))
+}
+
+// BroadcastTransaction propaga una transacción a todos los peers
+func (s *Server) BroadcastTransaction(tx *blockchain.Transaction) {
+	// Calcular hash de la transacción
+	txHash := calculateTxHash(tx)
+
+	// Verificar si ya vimos esta transacción
+	s.seenTxsMu.Lock()
+	if s.seenTxs[txHash] {
+		s.seenTxsMu.Unlock()
+		return // Ya la vimos, no propagar
+	}
+	// Marcar como vista
+	s.seenTxs[txHash] = true
+	s.seenTxsMu.Unlock()
+
+	// Serializar transacción a JSON
+	txData, err := json.Marshal(tx)
+	if err != nil {
+		log.Printf("❌ Error serializando transacción: %v", err)
+		return
+	}
+
+	msg := NewMessage(MsgNewTransaction, txData)
+
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	propagatedCount := 0
+	for _, peer := range s.peers {
+		if err := peer.SendMessage(msg); err != nil {
+			log.Printf("⚠️  Error enviando transacción a %s: %v", peer.GetAddress(), err)
+		} else {
+			propagatedCount++
+		}
+	}
+
+	if propagatedCount > 0 {
+		log.Printf("📡 Transacción propagada a %d peers", propagatedCount)
+	}
+}
+
+// BroadcastTransactionExcept propaga una transacción a todos los peers excepto uno
+func (s *Server) BroadcastTransactionExcept(tx *blockchain.Transaction, except *Peer) {
+	// Calcular hash de la transacción
+	txHash := calculateTxHash(tx)
+
+	// Verificar si ya vimos esta transacción
+	s.seenTxsMu.Lock()
+	if s.seenTxs[txHash] {
+		s.seenTxsMu.Unlock()
+		return // Ya la vimos, no propagar
+	}
+	// Marcar como vista
+	s.seenTxs[txHash] = true
+	s.seenTxsMu.Unlock()
+
+	// Serializar transacción a JSON
+	txData, err := json.Marshal(tx)
+	if err != nil {
+		log.Printf("❌ Error serializando transacción: %v", err)
+		return
+	}
+
+	msg := NewMessage(MsgNewTransaction, txData)
+
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	propagatedCount := 0
+	for _, peer := range s.peers {
+		// Saltar el peer que nos envió la transacción
+		if except != nil && peer.GetAddress() == except.GetAddress() {
+			continue
+		}
+
+		if err := peer.SendMessage(msg); err != nil {
+			log.Printf("⚠️  Error enviando transacción a %s: %v", peer.GetAddress(), err)
+		} else {
+			propagatedCount++
+		}
+	}
+
+	if propagatedCount > 0 {
+		log.Printf("📡 Transacción propagada a %d peers adicionales", propagatedCount)
 	}
 }
 

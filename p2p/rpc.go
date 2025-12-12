@@ -98,7 +98,8 @@ func (rpc *RPCServer) handleTransaction(w http.ResponseWriter, r *http.Request) 
 	log.Printf("📥 Transacción recibida por RPC: %s → %s (%.2f MTC)",
 		txReq.From, txReq.To, txReq.Amount)
 
-	// TODO: Propagar la transacción a peers
+	// Propagar la transacción a todos los peers
+	rpc.server.BroadcastTransaction(tx)
 
 	// Responder con éxito
 	w.Header().Set("Content-Type", "application/json")
