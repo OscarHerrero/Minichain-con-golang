@@ -662,12 +662,16 @@ func (s *Server) handleNewBlock(newBlock *blockchain.Block, peer *Peer) error {
 		default:
 		}
 
+		// Ejecutar transacciones del bloque
+		log.Printf("💼 Ejecutando %d transacciones del bloque...", len(newBlock.Transactions))
+		for i, tx := range newBlock.Transactions {
+			if err := tx.Execute(s.blockchain.AccountState, s.blockchain); err != nil {
+				log.Printf("   ⚠️  Error ejecutando tx %d: %v", i, err)
+			}
+		}
+
 		// Agregar bloque a nuestra cadena
 		s.blockchain.Blocks = append(s.blockchain.Blocks, newBlock)
-
-		// TODO: Ejecutar transacciones del bloque
-		// TODO: Actualizar state
-		// TODO: Persistir en DB
 
 		// Propagar a otros peers (evitando el que nos lo envió)
 		s.BroadcastBlockExcept(newBlock, peer)
@@ -784,11 +788,29 @@ func (s *Server) replaceChain(newBlocks []*blockchain.Block) bool {
 	// 4. Reemplazar la blockchain
 	s.blockchain.Blocks = newBlocks
 
-	// 5. Limpiar transacciones pendientes que ya están en bloques
+	// 5. Re-ejecutar todas las transacciones para reconstruir el estado
+	log.Printf("💼 Re-ejecutando transacciones para reconstruir estado...")
+	s.blockchain.AccountState = blockchain.NewAccountState()
+
+	totalTxs := 0
+	for i, block := range newBlocks {
+		if i == 0 {
+			continue // Saltar génesis
+		}
+		for _, tx := range block.Transactions {
+			if err := tx.Execute(s.blockchain.AccountState, s.blockchain); err != nil {
+				log.Printf("   ⚠️  Error re-ejecutando tx en bloque #%d: %v", i, err)
+			}
+			totalTxs++
+		}
+	}
+	log.Printf("✅ Estado reconstruido (%d transacciones procesadas)", totalTxs)
+
+	// 6. Limpiar transacciones pendientes que ya están en bloques
 	// TODO: Implementar lógica más sofisticada para mantener TXs no minadas
 	s.blockchain.PendingTxs = []*blockchain.Transaction{}
 
-	// 6. Reiniciar minado
+	// 7. Reiniciar minado
 	s.StartMining()
 
 	log.Printf("🎉 Blockchain reemplazada exitosamente - nueva altura: %d", len(s.blockchain.Blocks)-1)

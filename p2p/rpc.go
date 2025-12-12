@@ -34,6 +34,9 @@ func (rpc *RPCServer) Start() error {
 	// Endpoint para obtener estado de la blockchain
 	http.HandleFunc("/status", rpc.handleStatus)
 
+	// Endpoint para obtener balance de una cuenta
+	http.HandleFunc("/balance/", rpc.handleBalance)
+
 	// Endpoint de health check
 	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -43,9 +46,10 @@ func (rpc *RPCServer) Start() error {
 	addr := fmt.Sprintf(":%d", rpc.port)
 	log.Printf("🌐 Servidor RPC iniciado en http://localhost%s", addr)
 	log.Println("   Endpoints disponibles:")
-	log.Println("   - POST /tx       (Enviar transacción)")
-	log.Println("   - GET  /status   (Estado de la blockchain)")
-	log.Println("   - GET  /health   (Health check)")
+	log.Println("   - POST /tx              (Enviar transacción)")
+	log.Println("   - GET  /status          (Estado de la blockchain)")
+	log.Println("   - GET  /balance/<addr>  (Obtener balance de una cuenta)")
+	log.Println("   - GET  /health          (Health check)")
 
 	return http.ListenAndServe(addr, nil)
 }
@@ -190,4 +194,43 @@ func (rpc *RPCServer) handleStatus(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
 	json.NewEncoder(w).Encode(status)
+}
+
+// BalanceResponse es la respuesta del endpoint /balance
+type BalanceResponse struct {
+	Address string  `json:"address"`
+	Balance float64 `json:"balance"`
+	Nonce   int     `json:"nonce"`
+}
+
+// handleBalance maneja el endpoint GET /balance/<address>
+func (rpc *RPCServer) handleBalance(w http.ResponseWriter, r *http.Request) {
+	// Solo aceptar GET
+	if r.Method != http.MethodGet {
+		http.Error(w, "Método no permitido. Usa GET", http.StatusMethodNotAllowed)
+		return
+	}
+
+	// Extraer la dirección de la URL (después de /balance/)
+	address := r.URL.Path[len("/balance/"):]
+	if address == "" {
+		http.Error(w, "Dirección requerida. Usa /balance/<address>", http.StatusBadRequest)
+		return
+	}
+
+	// Obtener balance y nonce del AccountState
+	balance := rpc.blockchain.GetBalance(address)
+	nonce := rpc.blockchain.GetNonce(address)
+
+	response := BalanceResponse{
+		Address: address,
+		Balance: balance,
+		Nonce:   nonce,
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(http.StatusOK)
+	json.NewEncoder(w).Encode(response)
+
+	log.Printf("📊 Balance consultado: %s = %.2f MTC (nonce: %d)", address[:16]+"...", balance, nonce)
 }
