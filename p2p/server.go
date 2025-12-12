@@ -256,6 +256,21 @@ func (s *Server) performHandshake(peer *Peer) error {
 	// Actualizar info del peer
 	peer.UpdateInfo(theirHandshake.NodeID, theirHandshake.Version, theirHandshake.BestBlockIndex)
 
+	// Sincronización automática: Si el peer tiene una cadena más larga, sincronizar
+	ourHeight := len(s.blockchain.Blocks) - 1
+	theirHeight := theirHandshake.BestBlockIndex
+
+	if theirHeight > ourHeight {
+		log.Printf("🔄 Peer %s tiene cadena más larga (%d vs %d) - iniciando sincronización...",
+			truncateAddr(peer.GetAddress(), 20), theirHeight, ourHeight)
+		s.requestBlockchainFrom(peer, ourHeight+1)
+	} else if ourHeight > theirHeight {
+		log.Printf("📤 Nuestra cadena es más larga (%d vs %d) - peer se sincronizará con nosotros",
+			ourHeight, theirHeight)
+	} else {
+		log.Printf("✅ Blockchains sincronizadas (altura: %d)", ourHeight)
+	}
+
 	return nil
 }
 
