@@ -271,14 +271,19 @@ func (s *Server) handleMessage(peer *Peer, msg *Message) error {
 		return nil
 
 	case MsgGetBlockchain:
-		// Enviar info de nuestra blockchain
-		info := &BlockchainInfo{
-			Height:         len(s.blockchain.Blocks),
-			BestBlockHash:  s.blockchain.Blocks[len(s.blockchain.Blocks)-1].Hash,
-			BestBlockIndex: len(s.blockchain.Blocks) - 1,
-			Difficulty:     s.blockchain.Difficulty,
+		// Enviar toda nuestra blockchain
+		log.Printf("📤 Enviando blockchain completa a %s (%d bloques)...",
+			truncateAddr(peer.GetAddress(), 20), len(s.blockchain.Blocks))
+
+		// Serializar todos los bloques
+		blocksData, err := json.Marshal(s.blockchain.Blocks)
+		if err != nil {
+			return fmt.Errorf("error serializando blockchain: %v", err)
 		}
-		return peer.SendBlockchainInfo(info)
+
+		// Enviar con MsgBlocks
+		msg := NewMessage(MsgBlocks, blocksData)
+		return peer.SendMessage(msg)
 
 	case MsgBlockchain:
 		// Recibido info de blockchain del peer
@@ -341,6 +346,21 @@ func (s *Server) handleMessage(peer *Peer, msg *Message) error {
 
 		// Propagar a otros peers (excepto el que nos la envió)
 		s.BroadcastTransactionExcept(&tx, peer)
+
+		return nil
+
+	case MsgBlocks:
+		// Recibida blockchain completa
+		var blocks []*blockchain.Block
+		if err := json.Unmarshal(msg.Payload, &blocks); err != nil {
+			return fmt.Errorf("error decodificando bloques: %v", err)
+		}
+
+		log.Printf("📥 Blockchain recibida de %s (%d bloques)",
+			truncateAddr(peer.GetAddress(), 20), len(blocks))
+
+		// Intentar reemplazar nuestra cadena con la recibida
+		s.replaceChain(blocks)
 
 		return nil
 
@@ -649,11 +669,12 @@ func (s *Server) handleNewBlock(newBlock *blockchain.Block, peer *Peer) error {
 	} else {
 		// newBlock.Index > currentHeight+1
 		// El peer tiene una cadena más larga - necesitamos sincronizar
-		log.Printf("⚠️  Peer %s tiene cadena más larga (altura: %d, nosotros: %d)",
+		log.Printf("🔄 Peer %s tiene cadena más larga (altura: %d, nosotros: %d)",
 			truncateAddr(peer.GetAddress(), 20), newBlock.Index, currentHeight)
 
-		// TODO: Solicitar bloques faltantes
-		log.Println("   Sincronización de cadena no implementada aún")
+		// Solicitar toda la blockchain del peer
+		log.Printf("   📥 Solicitando blockchain completa desde altura %d...", currentHeight+1)
+		s.requestBlockchainFrom(peer, currentHeight+1)
 
 		return nil
 	}
@@ -690,6 +711,74 @@ func (s *Server) BroadcastBlockExcept(block *blockchain.Block, except *Peer) {
 	if propagatedCount > 0 {
 		log.Printf("📡 Bloque #%d propagado a %d peers adicionales", block.Index, propagatedCount)
 	}
+}
+
+// requestBlockchainFrom solicita la blockchain completa desde una altura específica
+func (s *Server) requestBlockchainFrom(peer *Peer, fromHeight int) {
+	// Enviar mensaje MsgGetBlockchain
+	msg := NewMessage(MsgGetBlockchain, nil)
+
+	if err := peer.SendMessage(msg); err != nil {
+		log.Printf("❌ Error solicitando blockchain: %v", err)
+	}
+}
+
+// replaceChain reemplaza nuestra blockchain si la nueva es más larga y válida
+func (s *Server) replaceChain(newBlocks []*blockchain.Block) bool {
+	// 1. Verificar que la nueva cadena es más larga
+	if len(newBlocks) <= len(s.blockchain.Blocks) {
+		log.Printf("⚠️  Nueva cadena no es más larga - rechazada")
+		return false
+	}
+
+	// 2. Validar toda la cadena
+	log.Printf("🔍 Validando cadena recibida (%d bloques)...", len(newBlocks))
+
+	// Verificar bloque génesis
+	if newBlocks[0].Index != 0 {
+		log.Printf("❌ Cadena inválida - primer bloque no es génesis")
+		return false
+	}
+
+	// Verificar cada bloque y sus enlaces
+	for i := 0; i < len(newBlocks); i++ {
+		block := newBlocks[i]
+
+		// Verificar que el bloque es válido
+		if !block.IsValid(s.blockchain.Difficulty) {
+			log.Printf("❌ Bloque #%d es inválido", i)
+			return false
+		}
+
+		// Verificar enlaces (excepto el génesis)
+		if i > 0 {
+			prevBlock := newBlocks[i-1]
+			if block.PreviousHash != prevBlock.Hash {
+				log.Printf("❌ Cadena rota en bloque #%d", i)
+				return false
+			}
+		}
+	}
+
+	log.Printf("✅ Cadena válida - reemplazando (longitud: %d → %d bloques)",
+		len(s.blockchain.Blocks), len(newBlocks))
+
+	// 3. Cancelar minado actual
+	s.StopMining()
+
+	// 4. Reemplazar la blockchain
+	s.blockchain.Blocks = newBlocks
+
+	// 5. Limpiar transacciones pendientes que ya están en bloques
+	// TODO: Implementar lógica más sofisticada para mantener TXs no minadas
+	s.blockchain.PendingTxs = []*blockchain.Transaction{}
+
+	// 6. Reiniciar minado
+	s.StartMining()
+
+	log.Printf("🎉 Blockchain reemplazada exitosamente - nueva altura: %d", len(s.blockchain.Blocks)-1)
+
+	return true
 }
 
 // calculateTxHash calcula un hash simple de una transacción
