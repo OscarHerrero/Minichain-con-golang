@@ -8,6 +8,7 @@ import (
 	"log"
 	"minichain/blockchain"
 	"net"
+	"strings"
 	"sync"
 	"time"
 )
@@ -26,6 +27,12 @@ type Server struct {
 	wg         sync.WaitGroup          // WaitGroup para goroutines
 	maxPeers   int                     // Número máximo de peers
 	onNewBlock func(*blockchain.Block) // Callback cuando hay nuevo bloque
+
+	// Control de minado
+	mining      bool       // Si este nodo está minando
+	miningMu    sync.Mutex // Mutex para controlar minado
+	stopMining  chan struct{}
+	newBlockCh  chan *blockchain.Block // Canal para notificar bloques nuevos
 }
 
 // truncateAddr trunca una dirección de forma segura para logging
@@ -50,6 +57,8 @@ func NewServer(host string, port int, bc *blockchain.Blockchain) *Server {
 		networkID:  1, // Red principal
 		quit:       make(chan struct{}),
 		maxPeers:   25, // Máximo 25 peers
+		stopMining: make(chan struct{}),
+		newBlockCh: make(chan *blockchain.Block, 10),
 	}
 }
 
@@ -285,9 +294,15 @@ func (s *Server) handleMessage(peer *Peer, msg *Message) error {
 
 	case MsgNewBlock:
 		// Recibido nuevo bloque
-		// TODO: Deserializar y validar bloque
-		log.Printf("📦 Nuevo bloque recibido de %s", peer.GetAddress())
-		return nil
+		var newBlock blockchain.Block
+		if err := json.Unmarshal(msg.Payload, &newBlock); err != nil {
+			return fmt.Errorf("error decodificando bloque: %v", err)
+		}
+
+		log.Printf("📦 Nuevo bloque recibido de %s: Bloque #%d", peer.GetAddress(), newBlock.Index)
+
+		// Procesar el bloque
+		return s.handleNewBlock(&newBlock, peer)
 
 	case MsgNewTransaction:
 		// Recibida nueva transacción
@@ -344,6 +359,290 @@ func (s *Server) BroadcastBlockchainInfo() {
 		if err := peer.SendMessage(msg); err != nil {
 			log.Printf("⚠️  Error enviando mensaje a %s: %v", peer.GetAddress(), err)
 		}
+	}
+}
+
+// StartMining inicia el minado continuo estilo Ethereum
+func (s *Server) StartMining() {
+	s.miningMu.Lock()
+	if s.mining {
+		s.miningMu.Unlock()
+		log.Println("⚠️  El minado ya está activo")
+		return
+	}
+	s.mining = true
+	s.miningMu.Unlock()
+
+	log.Println("⛏️  Minado continuo iniciado")
+
+	// Iniciar goroutine de minado
+	s.wg.Add(1)
+	go s.miningLoop()
+}
+
+// StopMining detiene el minado continuo
+func (s *Server) StopMining() {
+	s.miningMu.Lock()
+	if !s.mining {
+		s.miningMu.Unlock()
+		return
+	}
+	s.mining = false
+	s.miningMu.Unlock()
+
+	// Enviar señal de stop
+	select {
+	case s.stopMining <- struct{}{}:
+	default:
+	}
+
+	log.Println("🛑 Minado continuo detenido")
+}
+
+// miningLoop es el bucle principal de minado continuo
+func (s *Server) miningLoop() {
+	defer s.wg.Done()
+
+	for {
+		// Verificar si debemos seguir minando
+		s.miningMu.Lock()
+		shouldMine := s.mining
+		s.miningMu.Unlock()
+
+		if !shouldMine {
+			return
+		}
+
+		// Verificar si hay transacciones pendientes
+		if len(s.blockchain.PendingTxs) == 0 {
+			// No hay transacciones, esperar un poco
+			time.Sleep(5 * time.Second)
+			continue
+		}
+
+		log.Printf("⛏️  Iniciando minado de bloque %d con %d transacciones...\n",
+			len(s.blockchain.Blocks), len(s.blockchain.PendingTxs))
+
+		// Intentar minar el bloque con posibilidad de interrupción
+		block := s.mineBlockWithCancellation()
+
+		if block != nil {
+			// ¡Bloque minado exitosamente!
+			log.Printf("✅ Bloque %d minado exitosamente! Hash: %s\n",
+				block.Index, truncateAddr(block.Hash, 16))
+
+			// Propagar el bloque a todos los peers
+			s.BroadcastBlock(block)
+
+			// Notificar callback si existe
+			if s.onNewBlock != nil {
+				s.onNewBlock(block)
+			}
+		}
+	}
+}
+
+// mineBlockWithCancellation mina un bloque con la posibilidad de cancelación
+func (s *Server) mineBlockWithCancellation() *blockchain.Block {
+	// Preparar el bloque
+	prevBlock := s.blockchain.Blocks[len(s.blockchain.Blocks)-1]
+
+	newBlock := &blockchain.Block{
+		Index:        len(s.blockchain.Blocks),
+		Timestamp:    time.Now(),
+		Transactions: s.blockchain.PendingTxs,
+		PreviousHash: prevBlock.Hash,
+		Nonce:        0,
+	}
+
+	// Ejecutar transacciones (sin StateDB completo por ahora)
+	// TODO: Ejecutar transacciones y calcular state roots
+
+	// Inicializar roots
+	newBlock.StateRoot = make([]byte, 32)
+	newBlock.TxRoot = make([]byte, 32)
+	newBlock.ReceiptRoot = make([]byte, 32)
+
+	// Minar con posibilidad de cancelación
+	success := s.mineWithCancellation(newBlock, s.blockchain.Difficulty)
+
+	if !success {
+		// Minado cancelado (nuevo bloque recibido)
+		log.Println("⚠️  Minado cancelado - nuevo bloque recibido")
+		return nil
+	}
+
+	// Agregar bloque a la cadena
+	s.blockchain.Blocks = append(s.blockchain.Blocks, newBlock)
+
+	// Limpiar transacciones pendientes
+	s.blockchain.PendingTxs = []*blockchain.Transaction{}
+
+	// Persistir si tenemos DB
+	if s.blockchain != nil {
+		// TODO: Persistir con rawdb
+	}
+
+	return newBlock
+}
+
+// mineWithCancellation realiza el minado con cancelación
+func (s *Server) mineWithCancellation(block *blockchain.Block, difficulty int) bool {
+	target := strings.Repeat("0", difficulty)
+
+	for {
+		// Verificar si hay señal de cancelación
+		select {
+		case <-s.stopMining:
+			return false
+		case <-s.newBlockCh:
+			// Nuevo bloque recibido, cancelar minado
+			return false
+		default:
+			// Continuar minando
+		}
+
+		// Calcular hash
+		block.Hash = block.CalculateBlockHash()
+
+		// ¿Cumple con la dificultad?
+		if strings.HasPrefix(block.Hash, target) {
+			// ¡Encontrado!
+			return true
+		}
+
+		// Incrementar nonce
+		block.Nonce++
+
+		// Pequeña pausa cada 10000 intentos para permitir cancelación
+		if block.Nonce%10000 == 0 {
+			time.Sleep(1 * time.Millisecond)
+		}
+	}
+}
+
+// BroadcastBlock propaga un bloque a todos los peers
+func (s *Server) BroadcastBlock(block *blockchain.Block) {
+	// Serializar bloque a JSON
+	blockData, err := json.Marshal(block)
+	if err != nil {
+		log.Printf("❌ Error serializando bloque: %v", err)
+		return
+	}
+
+	msg := NewMessage(MsgNewBlock, blockData)
+
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	log.Printf("📡 Propagando bloque %d a %d peers...", block.Index, len(s.peers))
+
+	for _, peer := range s.peers {
+		if err := peer.SendMessage(msg); err != nil {
+			log.Printf("⚠️  Error enviando bloque a %s: %v", peer.GetAddress(), err)
+		}
+	}
+}
+
+// IsMining retorna si el nodo está minando actualmente
+func (s *Server) IsMining() bool {
+	s.miningMu.Lock()
+	defer s.miningMu.Unlock()
+	return s.mining
+}
+
+// handleNewBlock procesa un bloque recibido de un peer
+func (s *Server) handleNewBlock(newBlock *blockchain.Block, peer *Peer) error {
+	// 1. Verificar que el bloque es válido
+	if !newBlock.IsValid(s.blockchain.Difficulty) {
+		log.Printf("❌ Bloque #%d inválido - rechazado", newBlock.Index)
+		return fmt.Errorf("bloque inválido")
+	}
+
+	// 2. Obtener altura actual de nuestra cadena
+	currentHeight := len(s.blockchain.Blocks) - 1
+
+	// 3. Verificar qué tipo de bloque es
+	if newBlock.Index == currentHeight+1 {
+		// ✅ Es el siguiente bloque en nuestra cadena
+		lastBlock := s.blockchain.Blocks[currentHeight]
+
+		// Verificar que el PreviousHash coincide
+		if newBlock.PreviousHash != lastBlock.Hash {
+			log.Printf("❌ Bloque #%d rechazado - PreviousHash no coincide", newBlock.Index)
+			return fmt.Errorf("previousHash no coincide")
+		}
+
+		log.Printf("✅ Bloque #%d válido - agregando a la cadena", newBlock.Index)
+
+		// Cancelar minado actual
+		select {
+		case s.newBlockCh <- newBlock:
+		default:
+		}
+
+		// Agregar bloque a nuestra cadena
+		s.blockchain.Blocks = append(s.blockchain.Blocks, newBlock)
+
+		// TODO: Ejecutar transacciones del bloque
+		// TODO: Actualizar state
+		// TODO: Persistir en DB
+
+		// Propagar a otros peers (evitando el que nos lo envió)
+		s.BroadcastBlockExcept(newBlock, peer)
+
+		log.Printf("📊 Blockchain actualizada - altura: %d", len(s.blockchain.Blocks)-1)
+
+		return nil
+
+	} else if newBlock.Index <= currentHeight {
+		// Bloque antiguo o duplicado - ignorar
+		log.Printf("⚠️  Bloque #%d ignorado - ya lo tenemos", newBlock.Index)
+		return nil
+
+	} else {
+		// newBlock.Index > currentHeight+1
+		// El peer tiene una cadena más larga - necesitamos sincronizar
+		log.Printf("⚠️  Peer %s tiene cadena más larga (altura: %d, nosotros: %d)",
+			truncateAddr(peer.GetAddress(), 20), newBlock.Index, currentHeight)
+
+		// TODO: Solicitar bloques faltantes
+		log.Println("   Sincronización de cadena no implementada aún")
+
+		return nil
+	}
+}
+
+// BroadcastBlockExcept propaga un bloque a todos los peers excepto uno
+func (s *Server) BroadcastBlockExcept(block *blockchain.Block, except *Peer) {
+	// Serializar bloque a JSON
+	blockData, err := json.Marshal(block)
+	if err != nil {
+		log.Printf("❌ Error serializando bloque: %v", err)
+		return
+	}
+
+	msg := NewMessage(MsgNewBlock, blockData)
+
+	s.peersMu.RLock()
+	defer s.peersMu.RUnlock()
+
+	propagatedCount := 0
+	for _, peer := range s.peers {
+		// Saltar el peer que nos envió el bloque
+		if except != nil && peer.GetAddress() == except.GetAddress() {
+			continue
+		}
+
+		if err := peer.SendMessage(msg); err != nil {
+			log.Printf("⚠️  Error enviando bloque a %s: %v", peer.GetAddress(), err)
+		} else {
+			propagatedCount++
+		}
+	}
+
+	if propagatedCount > 0 {
+		log.Printf("📡 Bloque #%d propagado a %d peers adicionales", block.Index, propagatedCount)
 	}
 }
 

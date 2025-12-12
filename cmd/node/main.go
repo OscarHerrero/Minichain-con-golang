@@ -20,6 +20,8 @@ func main() {
 	datadir := flag.String("datadir", "./chaindata", "Directorio para datos de blockchain")
 	difficulty := flag.Int("difficulty", 2, "Dificultad de minado")
 	bootstrap := flag.String("bootstrap", "", "Nodos bootstrap separados por comas (ej: 192.168.1.10:3000,192.168.1.11:3000)")
+	mine := flag.Bool("mine", true, "Habilitar minado continuo (default: true)")
+	autoTx := flag.Bool("autotx", false, "Crear transacciones automáticas para testing (default: false)")
 
 	flag.Parse()
 
@@ -73,6 +75,20 @@ func main() {
 				}(node)
 			}
 		}
+		fmt.Println()
+	}
+
+	// Iniciar minado si está habilitado
+	if *mine {
+		fmt.Println("⛏️  Iniciando minado continuo...")
+		server.StartMining()
+		fmt.Println()
+	}
+
+	// Crear transacciones automáticas si está habilitado (para testing)
+	if *autoTx {
+		fmt.Println("🤖 Modo auto-transacciones habilitado (testing)")
+		go autoCreateTransactions(bc)
 		fmt.Println()
 	}
 
@@ -133,6 +149,13 @@ func printStatus(server *p2p.Server, bc *blockchain.Blockchain) {
 	fmt.Printf("   • Último hash: %s...\n", bc.Blocks[len(bc.Blocks)-1].Hash[:16])
 	fmt.Printf("   • Transacciones pendientes: %d\n", len(bc.PendingTxs))
 	fmt.Println()
+	fmt.Printf("⛏️  Minado:\n")
+	if server.IsMining() {
+		fmt.Println("   • Estado: ✅ ACTIVO")
+	} else {
+		fmt.Println("   • Estado: ⏸️  PAUSADO")
+	}
+	fmt.Println()
 	fmt.Printf("🌐 Red P2P:\n")
 	fmt.Printf("   • Peers conectados: %d\n", server.PeerCount())
 
@@ -145,4 +168,29 @@ func printStatus(server *p2p.Server, bc *blockchain.Blockchain) {
 	}
 	fmt.Println("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Println()
+}
+
+// autoCreateTransactions crea transacciones automáticamente para testing
+func autoCreateTransactions(bc *blockchain.Blockchain) {
+	ticker := time.NewTicker(20 * time.Second)
+	defer ticker.Stop()
+
+	txCount := 0
+
+	for range ticker.C {
+		// Crear una transacción simple
+		tx := &blockchain.Transaction{
+			From:   fmt.Sprintf("auto-node-%d", time.Now().Unix()%100),
+			To:     fmt.Sprintf("recipient-%d", time.Now().Unix()%100),
+			Amount: float64(txCount%10 + 1),
+			Nonce:  txCount,
+			Data:   []byte{},
+		}
+
+		// Agregar al mempool (sin validación para testing)
+		bc.PendingTxs = append(bc.PendingTxs, tx)
+		txCount++
+
+		log.Printf("🤖 Transacción automática creada (#%d) - Total pendientes: %d", txCount, len(bc.PendingTxs))
+	}
 }
