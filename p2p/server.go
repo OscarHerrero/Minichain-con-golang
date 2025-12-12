@@ -400,44 +400,51 @@ func (s *Server) StopMining() {
 }
 
 // miningLoop es el bucle principal de minado continuo
+// Mina un bloque cada segundo (con o sin transacciones)
 func (s *Server) miningLoop() {
 	defer s.wg.Done()
 
+	// Ticker para minar cada segundo
+	ticker := time.NewTicker(1 * time.Second)
+	defer ticker.Stop()
+
 	for {
-		// Verificar si debemos seguir minando
-		s.miningMu.Lock()
-		shouldMine := s.mining
-		s.miningMu.Unlock()
+		select {
+		case <-ticker.C:
+			// Verificar si debemos seguir minando
+			s.miningMu.Lock()
+			shouldMine := s.mining
+			s.miningMu.Unlock()
 
-		if !shouldMine {
-			return
-		}
-
-		// Verificar si hay transacciones pendientes
-		if len(s.blockchain.PendingTxs) == 0 {
-			// No hay transacciones, esperar un poco
-			time.Sleep(5 * time.Second)
-			continue
-		}
-
-		log.Printf("⛏️  Iniciando minado de bloque %d con %d transacciones...\n",
-			len(s.blockchain.Blocks), len(s.blockchain.PendingTxs))
-
-		// Intentar minar el bloque con posibilidad de interrupción
-		block := s.mineBlockWithCancellation()
-
-		if block != nil {
-			// ¡Bloque minado exitosamente!
-			log.Printf("✅ Bloque %d minado exitosamente! Hash: %s\n",
-				block.Index, truncateAddr(block.Hash, 16))
-
-			// Propagar el bloque a todos los peers
-			s.BroadcastBlock(block)
-
-			// Notificar callback si existe
-			if s.onNewBlock != nil {
-				s.onNewBlock(block)
+			if !shouldMine {
+				return
 			}
+
+			// Contar transacciones pendientes
+			txCount := len(s.blockchain.PendingTxs)
+
+			log.Printf("⛏️  Iniciando minado de bloque %d (%d transacciones)...\n",
+				len(s.blockchain.Blocks), txCount)
+
+			// Intentar minar el bloque con posibilidad de interrupción
+			block := s.mineBlockWithCancellation()
+
+			if block != nil {
+				// ¡Bloque minado exitosamente!
+				log.Printf("✅ Bloque %d minado exitosamente! Hash: %s (txs: %d)\n",
+					block.Index, truncateAddr(block.Hash, 16), len(block.Transactions))
+
+				// Propagar el bloque a todos los peers
+				s.BroadcastBlock(block)
+
+				// Notificar callback si existe
+				if s.onNewBlock != nil {
+					s.onNewBlock(block)
+				}
+			}
+
+		case <-s.quit:
+			return
 		}
 	}
 }
@@ -447,10 +454,15 @@ func (s *Server) mineBlockWithCancellation() *blockchain.Block {
 	// Preparar el bloque
 	prevBlock := s.blockchain.Blocks[len(s.blockchain.Blocks)-1]
 
+	// Copiar transacciones pendientes para este bloque
+	// (puede ser un slice vacío si no hay transacciones)
+	txs := make([]*blockchain.Transaction, len(s.blockchain.PendingTxs))
+	copy(txs, s.blockchain.PendingTxs)
+
 	newBlock := &blockchain.Block{
 		Index:        len(s.blockchain.Blocks),
 		Timestamp:    time.Now(),
-		Transactions: s.blockchain.PendingTxs,
+		Transactions: txs,
 		PreviousHash: prevBlock.Hash,
 		Nonce:        0,
 	}

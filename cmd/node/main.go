@@ -22,6 +22,7 @@ func main() {
 	bootstrap := flag.String("bootstrap", "", "Nodos bootstrap separados por comas (ej: 192.168.1.10:3000,192.168.1.11:3000)")
 	mine := flag.Bool("mine", true, "Habilitar minado continuo (default: true)")
 	autoTx := flag.Bool("autotx", false, "Crear transacciones automáticas para testing (default: false)")
+	rpcPort := flag.Int("rpc", 8545, "Puerto del servidor RPC (default: 8545)")
 
 	flag.Parse()
 
@@ -44,16 +45,25 @@ func main() {
 	// Crear servidor P2P
 	server := p2p.NewServer(*host, *port, bc)
 
-	// Iniciar servidor
+	// Iniciar servidor P2P
 	if err := server.Start(); err != nil {
 		log.Fatalf("❌ Error iniciando servidor P2P: %v", err)
 	}
 
+	// Iniciar servidor RPC en goroutine
+	rpcServer := p2p.NewRPCServer(*rpcPort, bc, server)
+	go func() {
+		if err := rpcServer.Start(); err != nil {
+			log.Fatalf("❌ Error iniciando servidor RPC: %v", err)
+		}
+	}()
+
 	fmt.Println()
 	fmt.Println("┌────────────────────────────────────────────────────────────┐")
-	fmt.Printf("│ 🌐 Nodo escuchando en: %s:%d                       \n", *host, *port)
-	fmt.Printf("│ 📊 Dificultad: %d                                          \n", *difficulty)
-	fmt.Printf("│ 💾 Datos en: %s                                    \n", *datadir)
+	fmt.Printf("│ 🌐 Nodo P2P:    %s:%d                              \n", *host, *port)
+	fmt.Printf("│ 🔌 RPC API:     http://localhost:%d                        \n", *rpcPort)
+	fmt.Printf("│ 📊 Dificultad:  %d                                         \n", *difficulty)
+	fmt.Printf("│ 💾 Datos:       %s                                 \n", *datadir)
 	fmt.Println("└────────────────────────────────────────────────────────────┘")
 	fmt.Println()
 
